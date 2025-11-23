@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JB Creations - Shipping Label Sorter</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🏷️ JB Creations - Shipping Label Sorter</h1>
+            <p>Upload your Flipkart, Amazon, and Meesho shipping labels together - automatic platform detection</p>
+        </header>
+
+        <main>
+            <section class="upload-section">
+                <div class="upload-area" id="uploadArea">
+                    <div class="upload-icon">📤</div>
+                    <h2>Drop your PDF files here</h2>
+                    <p>or click to browse (Ctrl+Click or Shift+Click to select multiple)</p>
+                    <input type="file" id="fileInput" accept=".pdf" multiple>
+                </div>
+                <div class="button-group">
+                    <button class="btn btn-secondary" id="clearBtn" style="display: none;">
+                        🗑️ Clear Files
+                    </button>
+                    <button class="btn btn-primary" id="processBtn" disabled>
+                        Process & Sort Labels
+                    </button>
+                </div>
+            </section>
+
+            <section class="platform-info" id="platformInfo" style="display: none;">
+                <h3>📋 Detected Platforms</h3>
+                <div class="platform-stats" id="platformStats">
+                    <!-- Platform counts will be displayed here -->
+                </div>
+            </section>
+
+            <section class="status-section" id="statusSection" style="display: none;">
+                <div class="status-card">
+                    <h3>Processing Status</h3>
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progressFill"></div>
+                    </div>
+                    <p id="statusText">Initializing...</p>
+                </div>
+            </section>
+
+            <section class="results-section" id="resultsSection" style="display: none;">
+                <div class="results-card">
+                    <h3>📊 Sorting Results</h3>
+                    <div class="stats">
+                        <div class="stat-item">
+                            <span class="stat-value" id="totalPages">0</span>
+                            <span class="stat-label">Total Pages</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-value" id="matchedPages">0</span>
+                            <span class="stat-label">Priority Labels Found</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-value" id="unmatchedPages">0</span>
+                            <span class="stat-label">Other Labels</span>
+                        </div>
+                    </div>
+                    
+                    <div class="platform-breakdown" id="platformBreakdown">
+                        <h4>📦 Platform Breakdown</h4>
+                        <div class="platform-breakdown-stats" id="platformBreakdownStats"></div>
+                    </div>
+                    
+                    <div class="matched-labels" id="matchedLabels">
+                        <h4>Priority Labels Found:</h4>
+                        <div class="label-chips" id="labelChips"></div>
+                    </div>
+
+                    <button class="btn btn-success" id="downloadBtn">
+                        ⬇️ Download Sorted PDF
+                    </button>
+                </div>
+            </section>
+
+            <section class="priority-list-section">
+                <details>
+                    <summary>View Priority Label List</summary>
+                    <div class="priority-list" id="priorityList"></div>
+                    <button class="btn btn-edit" id="editLabelsBtn">
+                        ✏️ Edit Priority Labels
+                    </button>
+                </details>
+            </section>
+
+            <!-- Password Modal -->
+            <div class="modal" id="passwordModal" style="display: none;">
+                <div class="modal-content">
+                    <h3>🔒 Enter Password</h3>
+                    <p>Enter password to edit priority labels</p>
+                    <input type="password" id="passwordInput" placeholder="Enter password">
+                    <div class="modal-buttons">
+                        <button class="btn btn-secondary" id="cancelPasswordBtn">Cancel</button>
+                        <button class="btn btn-primary" id="submitPasswordBtn">Submit</button>
+                    </div>
+                    <p class="error-message" id="passwordError" style="display: none;">Incorrect password!</p>
+                </div>
+            </div>
+
+            <!-- Edit Labels Modal -->
+            <div class="modal" id="editLabelsModal" style="display: none;">
+                <div class="modal-content modal-large">
+                    <h3>✏️ Edit Priority Labels</h3>
+                    <p>Enter one label per line. Labels will be prioritized in the order listed.</p>
+                    <textarea id="labelsTextarea" rows="20"></textarea>
+                    <div class="modal-buttons">
+                        <button class="btn btn-secondary" id="cancelEditBtn">Cancel</button>
+                        <button class="btn btn-primary" id="saveLabelsBtn">Save Changes</button>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <footer>
+            <p>&copy; 2025 JB Creations. Built for efficient label management.</p>
+        </footer>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
