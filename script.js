@@ -413,12 +413,22 @@ function sortPages(pages) {
         // Check if page text contains any priority label
         for (const label of PRIORITY_LABELS) {
             const labelLower = label.toLowerCase();
-            if (page.text.includes(labelLower)) {
-                matched = true;
-                const currentIndex = priorityMap.get(labelLower);
-                if (currentIndex < priorityIndex) {
-                    priorityIndex = currentIndex;
-                    matchedLabel = label;
+            const textLower = page.text;
+            
+            // Find the label in the text
+            const index = textLower.indexOf(labelLower);
+            if (index !== -1) {
+                // Check if there's a comma immediately after the label
+                const charAfterLabel = textLower.charAt(index + labelLower.length);
+                
+                // Only match if there's NO comma after the label
+                if (charAfterLabel !== ',') {
+                    matched = true;
+                    const currentIndex = priorityMap.get(labelLower);
+                    if (currentIndex < priorityIndex) {
+                        priorityIndex = currentIndex;
+                        matchedLabel = label;
+                    }
                 }
             }
         }
