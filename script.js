@@ -418,11 +418,11 @@ function sortPages(pages) {
             // Find the label in the text
             const index = textLower.indexOf(labelLower);
             if (index !== -1) {
-                // Check if there's a comma immediately after the label
+                // Check the character immediately after the label
                 const charAfterLabel = textLower.charAt(index + labelLower.length);
                 
-                // Only match if there's NO comma after the label
-                if (charAfterLabel !== ',') {
+                // Only match if there's NO comma or digit after the label
+                if (charAfterLabel !== ',' && !/\d/.test(charAfterLabel)) {
                     matched = true;
                     const currentIndex = priorityMap.get(labelLower);
                     if (currentIndex < priorityIndex) {
