@@ -98,6 +98,7 @@ let uploadedFiles = [];
 let processedPDF = null;
 let labelOccurrences = {}; // Store label counts globally for use during download
 let pendingPasswordAction = null; // Track which action requires password ('editLabels' or 'googleSheets')
+let stockAlreadyDeducted = false; // Prevent duplicate stock deductions on multiple download clicks
 
 // PDF.js worker setup
 pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
@@ -217,6 +218,10 @@ function clearFiles() {
     platformInfo.style.display = 'none';
     resultsSection.style.display = 'none';
     statusSection.style.display = 'none';
+    
+    // Reset stock deduction flag for new batch
+    stockAlreadyDeducted = false;
+    labelOccurrences = {};
     
     // Reset upload area text
     const uploadText = uploadArea.querySelector('h2');
@@ -355,6 +360,9 @@ async function processLabels() {
         
         // Store label counts globally for use during download
         labelOccurrences = labelCounts;
+        
+        // Reset stock deduction flag for this new processing batch
+        stockAlreadyDeducted = false;
         
         updateProgress(80, 'Creating sorted PDF...');
         
@@ -957,13 +965,20 @@ async function downloadSortedPDF() {
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
         
-        // After successful download, deduct stock from Google Sheets
-        if (Object.keys(labelOccurrences).length > 0 && GOOGLE_SHEETS_CONFIG.webAppUrl) {
+        // After successful download, deduct stock from Google Sheets (only once per processing)
+        if (Object.keys(labelOccurrences).length > 0 && GOOGLE_SHEETS_CONFIG.webAppUrl && !stockAlreadyDeducted) {
             const result = await deductStockFromGoogleSheets(labelOccurrences);
             if (result.success) {
                 console.log('Stock deducted successfully');
+                stockAlreadyDeducted = true; // Mark as deducted to prevent duplicate deductions
             } else {
                 console.log('Stock deduction note:', result.message);
+            }
+        } else if (stockAlreadyDeducted) {
+            console.log('Stock already deducted for this batch - skipping duplicate deduction');
+            if (stockUpdateStatus) {
+                stockUpdateStatus.innerHTML = '<span class="status-success">✅ Stock already updated for this batch</span>';
+                stockUpdateStatus.style.display = 'block';
             }
         }
         
