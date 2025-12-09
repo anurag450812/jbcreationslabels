@@ -84,9 +84,20 @@ let PRIORITY_LABELS = [
 // Password for editing
 const EDIT_PASSWORD = '200274';
 
+// Google Sheets Configuration
+let GOOGLE_SHEETS_CONFIG = {
+    spreadsheetId: localStorage.getItem('googleSheetsId') || '',
+    sheetName: localStorage.getItem('googleSheetName') || 'STOCK COUNT',
+    apiKey: localStorage.getItem('googleApiKey') || '',
+    // For write access, we'll use Google Apps Script Web App
+    webAppUrl: localStorage.getItem('googleWebAppUrl') || ''
+};
+
 // Global variables
 let uploadedFiles = [];
 let processedPDF = null;
+let labelOccurrences = {}; // Store label counts globally for use during download
+let pendingPasswordAction = null; // Track which action requires password ('editLabels' or 'googleSheets')
 
 // PDF.js worker setup
 pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
@@ -167,7 +178,7 @@ function setupEventListeners() {
     clearBtn.addEventListener('click', clearFiles);
     
     // Edit labels button
-    editLabelsBtn.addEventListener('click', showPasswordModal);
+    editLabelsBtn.addEventListener('click', () => showPasswordModal('editLabels'));
     
     // Password modal buttons
     submitPasswordBtn.addEventListener('click', checkPassword);
@@ -340,7 +351,10 @@ async function processLabels() {
         updateProgress(60, 'Analyzing labels...');
         
         // Sort pages based on priority
-        const { priorityPages, otherPages, matchedLabels } = sortPages(allPages);
+        const { priorityPages, otherPages, matchedLabels, labelCounts } = sortPages(allPages);
+        
+        // Store label counts globally for use during download
+        labelOccurrences = labelCounts;
         
         updateProgress(80, 'Creating sorted PDF...');
         
@@ -349,8 +363,8 @@ async function processLabels() {
         
         updateProgress(100, 'Complete!');
         
-        // Display results
-        displayResults(allPages.length, priorityPages.length, otherPages.length, matchedLabels, allPages);
+        // Display results with label counts
+        displayResults(allPages.length, priorityPages.length, otherPages.length, matchedLabels, allPages, labelCounts);
         
     } catch (error) {
         console.error('Error processing PDFs:', error);
@@ -398,6 +412,12 @@ function sortPages(pages) {
     const otherPages = [];
     const matchedLabels = new Set();
     const priorityMap = new Map();
+    const labelCounts = {}; // Count occurrences of each label
+    
+    // Initialize label counts
+    PRIORITY_LABELS.forEach(label => {
+        labelCounts[label] = 0;
+    });
     
     // Create priority index map
     PRIORITY_LABELS.forEach((label, index) => {
@@ -436,6 +456,8 @@ function sortPages(pages) {
         if (matched) {
             priorityPages.push({ ...page, priorityIndex, matchedLabel });
             matchedLabels.add(matchedLabel);
+            // Count the occurrence
+            labelCounts[matchedLabel] = (labelCounts[matchedLabel] || 0) + 1;
         } else {
             otherPages.push(page);
         }
@@ -444,10 +466,17 @@ function sortPages(pages) {
     // Sort priority pages by their priority index
     priorityPages.sort((a, b) => a.priorityIndex - b.priorityIndex);
     
+    // Filter to only labels that were found
+    const foundLabelCounts = {};
+    for (const label of matchedLabels) {
+        foundLabelCounts[label] = labelCounts[label];
+    }
+    
     return {
         priorityPages,
         otherPages,
-        matchedLabels: Array.from(matchedLabels)
+        matchedLabels: Array.from(matchedLabels),
+        labelCounts: foundLabelCounts // Return the counts
     };
 }
 
@@ -502,7 +531,7 @@ async function createSortedPDF(sortedPages, originalFiles) {
     return mergedPdf;
 }
 
-function displayResults(total, matched, unmatched, labels, allPages) {
+function displayResults(total, matched, unmatched, labels, allPages, labelCounts = {}) {
     // Update stats
     document.getElementById('totalPages').textContent = total;
     document.getElementById('matchedPages').textContent = matched;
@@ -557,17 +586,71 @@ function displayResults(total, matched, unmatched, labels, allPages) {
     
     platformBreakdownStats.innerHTML = breakdownHtml;
     
-    // Display matched labels
+    // Display matched labels WITH COUNTS
     const labelChips = document.getElementById('labelChips');
-    labelChips.innerHTML = labels.map(label => 
-        `<span class="label-chip">${label}</span>`
-    ).join('');
+    labelChips.innerHTML = labels.map(label => {
+        const count = labelCounts[label] || 0;
+        return `<span class="label-chip">${label} <span class="label-count">×${count}</span></span>`;
+    }).join('');
+    
+    // Display detailed label occurrence table
+    displayLabelOccurrenceTable(labelCounts);
     
     // Show results section
     resultsSection.style.display = 'block';
     
     // Scroll to results
     resultsSection.scrollIntoView({ behavior: 'smooth' });
+}
+
+function displayLabelOccurrenceTable(labelCounts) {
+    const container = document.getElementById('labelOccurrenceTable');
+    if (!container) return;
+    
+    const labels = Object.keys(labelCounts);
+    if (labels.length === 0) {
+        container.innerHTML = '<p>No priority labels found in the processed PDFs.</p>';
+        return;
+    }
+    
+    // Sort labels by count (descending)
+    labels.sort((a, b) => labelCounts[b] - labelCounts[a]);
+    
+    let tableHtml = `
+        <table class="occurrence-table">
+            <thead>
+                <tr>
+                    <th>Priority Label</th>
+                    <th>Occurrences</th>
+                </tr>
+            </thead>
+            <tbody>
+    `;
+    
+    let totalOccurrences = 0;
+    labels.forEach(label => {
+        const count = labelCounts[label];
+        totalOccurrences += count;
+        tableHtml += `
+            <tr>
+                <td>${label}</td>
+                <td class="count-cell">${count}</td>
+            </tr>
+        `;
+    });
+    
+    tableHtml += `
+            </tbody>
+            <tfoot>
+                <tr class="total-row">
+                    <td><strong>Total</strong></td>
+                    <td class="count-cell"><strong>${totalOccurrences}</strong></td>
+                </tr>
+            </tfoot>
+        </table>
+    `;
+    
+    container.innerHTML = tableHtml;
 }
 
 async function downloadSortedPDF() {
@@ -599,10 +682,22 @@ function updateProgress(percent, message) {
 }
 
 // Password and Edit Modal Functions
-function showPasswordModal() {
+function showPasswordModal(action) {
+    pendingPasswordAction = action;
     passwordModal.style.display = 'flex';
     passwordInput.value = '';
     passwordError.style.display = 'none';
+    
+    // Update the message based on action
+    const messageEl = document.getElementById('passwordModalMessage');
+    if (messageEl) {
+        if (action === 'editLabels') {
+            messageEl.textContent = 'Enter password to edit priority labels';
+        } else if (action === 'googleSheets') {
+            messageEl.textContent = 'Enter password to configure Google Sheets';
+        }
+    }
+    
     passwordInput.focus();
 }
 
@@ -617,7 +712,13 @@ function checkPassword() {
     
     if (enteredPassword === EDIT_PASSWORD) {
         hidePasswordModal();
-        showEditLabelsModal();
+        // Execute the pending action based on what was requested
+        if (pendingPasswordAction === 'editLabels') {
+            showEditLabelsModal();
+        } else if (pendingPasswordAction === 'googleSheets') {
+            showGoogleSheetsModal();
+        }
+        pendingPasswordAction = null;
     } else {
         passwordError.style.display = 'block';
         passwordInput.value = '';
@@ -682,3 +783,277 @@ const croppingLogic = {
 
 // Export for future use
 window.croppingLogic = croppingLogic;
+
+// ============================================
+// GOOGLE SHEETS INTEGRATION
+// ============================================
+
+// DOM elements for Google Sheets (will be initialized after DOM loads)
+let googleSheetsModal, sheetsIdInput, sheetNameInput, webAppUrlInput;
+let saveSheetsConfigBtn, cancelSheetsConfigBtn, configureGoogleSheetsBtn;
+let stockUpdateStatus;
+
+// Initialize Google Sheets elements after DOM is loaded
+function initializeGoogleSheetsElements() {
+    googleSheetsModal = document.getElementById('googleSheetsModal');
+    sheetsIdInput = document.getElementById('sheetsIdInput');
+    sheetNameInput = document.getElementById('sheetNameInput');
+    webAppUrlInput = document.getElementById('webAppUrlInput');
+    saveSheetsConfigBtn = document.getElementById('saveSheetsConfigBtn');
+    cancelSheetsConfigBtn = document.getElementById('cancelSheetsConfigBtn');
+    configureGoogleSheetsBtn = document.getElementById('configureGoogleSheetsBtn');
+    stockUpdateStatus = document.getElementById('stockUpdateStatus');
+    
+    // Setup Google Sheets event listeners
+    if (configureGoogleSheetsBtn) {
+        configureGoogleSheetsBtn.addEventListener('click', () => showPasswordModal('googleSheets'));
+    }
+    if (saveSheetsConfigBtn) {
+        saveSheetsConfigBtn.addEventListener('click', saveGoogleSheetsConfig);
+    }
+    if (cancelSheetsConfigBtn) {
+        cancelSheetsConfigBtn.addEventListener('click', hideGoogleSheetsModal);
+    }
+    if (googleSheetsModal) {
+        googleSheetsModal.addEventListener('click', (e) => {
+            if (e.target === googleSheetsModal) {
+                hideGoogleSheetsModal();
+            }
+        });
+    }
+}
+
+// Call this from initializeApp
+const originalInitializeApp = initializeApp;
+initializeApp = function() {
+    originalInitializeApp();
+    initializeGoogleSheetsElements();
+    updateGoogleSheetsStatus();
+};
+
+function showGoogleSheetsModal() {
+    if (!googleSheetsModal) return;
+    googleSheetsModal.style.display = 'flex';
+    if (sheetsIdInput) sheetsIdInput.value = GOOGLE_SHEETS_CONFIG.spreadsheetId;
+    if (sheetNameInput) sheetNameInput.value = GOOGLE_SHEETS_CONFIG.sheetName;
+    if (webAppUrlInput) webAppUrlInput.value = GOOGLE_SHEETS_CONFIG.webAppUrl;
+}
+
+function hideGoogleSheetsModal() {
+    if (!googleSheetsModal) return;
+    googleSheetsModal.style.display = 'none';
+}
+
+function saveGoogleSheetsConfig() {
+    GOOGLE_SHEETS_CONFIG.spreadsheetId = sheetsIdInput.value.trim();
+    GOOGLE_SHEETS_CONFIG.sheetName = sheetNameInput.value.trim() || 'Sheet1';
+    GOOGLE_SHEETS_CONFIG.webAppUrl = webAppUrlInput.value.trim();
+    
+    // Save to localStorage
+    localStorage.setItem('googleSheetsId', GOOGLE_SHEETS_CONFIG.spreadsheetId);
+    localStorage.setItem('googleSheetName', GOOGLE_SHEETS_CONFIG.sheetName);
+    localStorage.setItem('googleWebAppUrl', GOOGLE_SHEETS_CONFIG.webAppUrl);
+    
+    hideGoogleSheetsModal();
+    updateGoogleSheetsStatus();
+    alert('✅ Google Sheets configuration saved!');
+}
+
+function updateGoogleSheetsStatus() {
+    const statusEl = document.getElementById('googleSheetsConnectionStatus');
+    if (!statusEl) return;
+    
+    if (GOOGLE_SHEETS_CONFIG.webAppUrl) {
+        statusEl.innerHTML = '<span class="status-connected">✅ Connected</span>';
+    } else {
+        statusEl.innerHTML = '<span class="status-disconnected">⚠️ Not Configured</span>';
+    }
+}
+
+// Function to deduct stock from Google Sheets
+async function deductStockFromGoogleSheets(labelCounts) {
+    if (!GOOGLE_SHEETS_CONFIG.webAppUrl) {
+        console.log('Google Sheets not configured, skipping stock update');
+        return { success: false, message: 'Google Sheets not configured' };
+    }
+    
+    if (Object.keys(labelCounts).length === 0) {
+        return { success: false, message: 'No labels to update' };
+    }
+    
+    try {
+        // Show updating status
+        if (stockUpdateStatus) {
+            stockUpdateStatus.innerHTML = '<span class="status-updating">⏳ Updating stock...</span>';
+            stockUpdateStatus.style.display = 'block';
+        }
+        
+        // Prepare the data to send
+        const updateData = {
+            action: 'deductStock',
+            sheetName: GOOGLE_SHEETS_CONFIG.sheetName,
+            labelCounts: labelCounts
+        };
+        
+        // Use POST with redirect:follow for Google Apps Script
+        // Google Apps Script returns a redirect, so we need to follow it
+        const response = await fetch(GOOGLE_SHEETS_CONFIG.webAppUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'text/plain', // Use text/plain to avoid CORS preflight
+            },
+            body: JSON.stringify(updateData),
+            redirect: 'follow'
+        });
+        
+        // Try to parse the response
+        let result;
+        try {
+            const text = await response.text();
+            result = JSON.parse(text);
+        } catch (parseError) {
+            // If parsing fails, check if response was ok
+            if (response.ok) {
+                result = { success: true };
+            } else {
+                throw new Error('Failed to update stock: ' + response.status);
+            }
+        }
+        
+        if (result.success) {
+            if (stockUpdateStatus) {
+                const updatedCount = result.totalUpdated || Object.keys(labelCounts).length;
+                stockUpdateStatus.innerHTML = `<span class="status-success">✅ Stock updated! (${updatedCount} labels deducted)</span>`;
+            }
+            console.log('Stock deduction successful:', result);
+            return { success: true, message: 'Stock updated successfully', data: result };
+        } else {
+            throw new Error(result.message || 'Unknown error');
+        }
+        
+    } catch (error) {
+        console.error('Error updating Google Sheets:', error);
+        if (stockUpdateStatus) {
+            stockUpdateStatus.innerHTML = `<span class="status-error">❌ Error: ${error.message}</span>`;
+        }
+        return { success: false, message: error.message };
+    }
+}
+
+// Updated download function with stock deduction
+async function downloadSortedPDF() {
+    if (!processedPDF) return;
+    
+    try {
+        const pdfBytes = await processedPDF.save();
+        const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+        const url = URL.createObjectURL(blob);
+        
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `sorted_labels_${new Date().getTime()}.pdf`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        
+        // After successful download, deduct stock from Google Sheets
+        if (Object.keys(labelOccurrences).length > 0 && GOOGLE_SHEETS_CONFIG.webAppUrl) {
+            const result = await deductStockFromGoogleSheets(labelOccurrences);
+            if (result.success) {
+                console.log('Stock deducted successfully');
+            } else {
+                console.log('Stock deduction note:', result.message);
+            }
+        }
+        
+    } catch (error) {
+        console.error('Error downloading PDF:', error);
+        alert('Error downloading PDF. Please try again.');
+    }
+}
+
+// ============================================
+// GOOGLE APPS SCRIPT CODE (for user to deploy)
+// ============================================
+/*
+To make the Google Sheets integration work, you need to create a Google Apps Script:
+
+1. Open your Google Sheet
+2. Go to Extensions > Apps Script
+3. Delete any existing code and paste the following:
+
+function doPost(e) {
+  try {
+    var data = JSON.parse(e.postData.contents);
+    
+    if (data.action === 'deductStock') {
+      var sheetName = data.sheetName || 'Sheet1';
+      var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName);
+      
+      if (!sheet) {
+        return ContentService.createTextOutput(JSON.stringify({
+          success: false,
+          message: 'Sheet not found: ' + sheetName
+        })).setMimeType(ContentService.MimeType.JSON);
+      }
+      
+      var labelCounts = data.labelCounts;
+      var dataRange = sheet.getDataRange();
+      var values = dataRange.getValues();
+      
+      // Find and update each label
+      var updates = [];
+      for (var label in labelCounts) {
+        var deductAmount = labelCounts[label];
+        
+        // Search for the label in column A (case-insensitive)
+        for (var i = 1; i < values.length; i++) { // Start from 1 to skip header
+          var cellLabel = String(values[i][0]).toLowerCase().trim();
+          var searchLabel = label.toLowerCase().trim();
+          
+          if (cellLabel === searchLabel) {
+            var currentStock = Number(values[i][1]) || 0;
+            var newStock = Math.max(0, currentStock - deductAmount);
+            sheet.getRange(i + 1, 2).setValue(newStock);
+            updates.push({label: label, oldStock: currentStock, newStock: newStock, deducted: deductAmount});
+            break;
+          }
+        }
+      }
+      
+      return ContentService.createTextOutput(JSON.stringify({
+        success: true,
+        message: 'Stock updated',
+        updates: updates
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false,
+      message: 'Unknown action'
+    })).setMimeType(ContentService.MimeType.JSON);
+    
+  } catch (error) {
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false,
+      message: error.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function doGet(e) {
+  return ContentService.createTextOutput(JSON.stringify({
+    status: 'ok',
+    message: 'JB Creations Stock Update API is running'
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+
+4. Save the script
+5. Click Deploy > New deployment
+6. Select "Web app" as the type
+7. Set "Execute as" to "Me"
+8. Set "Who has access" to "Anyone"
+9. Click Deploy and authorize
+10. Copy the Web App URL and paste it in the website configuration
+*/

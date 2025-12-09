@@ -595,3 +595,217 @@ footer {
     background: var(--primary-color);
     border-radius: 4px;
 }
+
+/* Label Count Badge */
+.label-count {
+    background: rgba(255, 255, 255, 0.3);
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 0.85em;
+    margin-left: 5px;
+    font-weight: 700;
+}
+
+/* Label Occurrence Table */
+.label-occurrence-section {
+    margin-top: 25px;
+    padding: 20px;
+    background: #f8fafc;
+    border-radius: 12px;
+    border: 1px solid var(--border-color);
+}
+
+.label-occurrence-section h4 {
+    margin-bottom: 15px;
+    color: var(--text-primary);
+}
+
+.occurrence-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: white;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.occurrence-table thead {
+    background: var(--primary-color);
+    color: white;
+}
+
+.occurrence-table th,
+.occurrence-table td {
+    padding: 12px 15px;
+    text-align: left;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.occurrence-table tbody tr:hover {
+    background: #f1f5f9;
+}
+
+.occurrence-table .count-cell {
+    text-align: center;
+    font-weight: 600;
+    color: var(--primary-color);
+}
+
+.occurrence-table .total-row {
+    background: #f1f5f9;
+}
+
+.occurrence-table .total-row td {
+    border-bottom: none;
+}
+
+/* Stock Update Status */
+.stock-update-section {
+    margin-top: 20px;
+    text-align: center;
+}
+
+#stockUpdateStatus {
+    padding: 12px 20px;
+    border-radius: 8px;
+    font-weight: 500;
+}
+
+.status-updating {
+    color: #f59e0b;
+}
+
+.status-success {
+    color: #10b981;
+}
+
+.status-error {
+    color: #ef4444;
+}
+
+.status-connected {
+    color: #10b981;
+    font-weight: 600;
+}
+
+.status-disconnected {
+    color: #f59e0b;
+    font-weight: 600;
+}
+
+/* Google Sheets Section */
+.google-sheets-section {
+    background: var(--card-bg);
+    border-radius: 12px;
+    padding: 25px;
+    box-shadow: var(--shadow);
+    border: 1px solid var(--border-color);
+}
+
+.google-sheets-section h3 {
+    color: var(--text-primary);
+    margin-bottom: 10px;
+}
+
+.google-sheets-section p {
+    color: var(--text-secondary);
+    margin-bottom: 15px;
+}
+
+.sheets-status {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 15px;
+    font-size: 1rem;
+}
+
+/* Form Groups for Modal */
+.form-group {
+    margin-bottom: 20px;
+}
+
+.form-group label {
+    display: block;
+    font-weight: 600;
+    margin-bottom: 5px;
+    color: var(--text-primary);
+}
+
+.form-group input {
+    width: 100%;
+    padding: 12px;
+    border: 2px solid var(--border-color);
+    border-radius: 8px;
+    font-size: 1rem;
+    transition: border-color 0.3s ease;
+}
+
+.form-group input:focus {
+    outline: none;
+    border-color: var(--primary-color);
+}
+
+.form-group small {
+    display: block;
+    margin-top: 5px;
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+}
+
+/* Setup Instructions */
+.setup-instructions {
+    margin: 20px 0;
+    background: #f1f5f9;
+    border-radius: 8px;
+    padding: 15px;
+}
+
+.setup-instructions summary {
+    cursor: pointer;
+    font-weight: 600;
+    color: var(--primary-color);
+}
+
+.setup-instructions ol {
+    margin: 15px 0 15px 20px;
+    line-height: 1.8;
+}
+
+.script-code {
+    margin-top: 15px;
+    background: #1e293b;
+    border-radius: 8px;
+    padding: 15px;
+    overflow-x: auto;
+}
+
+.script-code p {
+    color: #94a3b8;
+    margin-bottom: 10px;
+}
+
+.script-code pre {
+    color: #e2e8f0;
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: 0.85rem;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.btn-copy {
+    background: var(--primary-color);
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    margin-top: 10px;
+    font-size: 0.9rem;
+}
+
+.btn-copy:hover {
+    background: var(--primary-dark);
+}

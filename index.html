@@ -78,6 +78,15 @@
                         <h4>Priority Labels Found:</h4>
                         <div class="label-chips" id="labelChips"></div>
                     </div>
+                    
+                    <div class="label-occurrence-section">
+                        <h4>📊 Label Occurrence Count</h4>
+                        <div id="labelOccurrenceTable"></div>
+                    </div>
+                    
+                    <div class="stock-update-section">
+                        <div id="stockUpdateStatus" style="display: none;"></div>
+                    </div>
 
                     <button class="btn btn-success" id="downloadBtn">
                         ⬇️ Download Sorted PDF
@@ -94,12 +103,26 @@
                     </button>
                 </details>
             </section>
+            
+            <section class="google-sheets-section">
+                <h3>📊 Google Sheets Integration</h3>
+                <p>Connect to your Google Sheet to automatically update stock counts when labels are processed.</p>
+                <div class="sheets-status">
+                    <span>Status: </span>
+                    <span id="googleSheetsConnectionStatus">
+                        <span class="status-disconnected">⚠️ Not Configured</span>
+                    </span>
+                </div>
+                <button class="btn btn-secondary" id="configureGoogleSheetsBtn">
+                    ⚙️ Configure Google Sheets
+                </button>
+            </section>
 
             <!-- Password Modal -->
             <div class="modal" id="passwordModal" style="display: none;">
                 <div class="modal-content">
                     <h3>🔒 Enter Password</h3>
-                    <p>Enter password to edit priority labels</p>
+                    <p id="passwordModalMessage">Enter password to edit priority labels</p>
                     <input type="password" id="passwordInput" placeholder="Enter password">
                     <div class="modal-buttons">
                         <button class="btn btn-secondary" id="cancelPasswordBtn">Cancel</button>
@@ -121,6 +144,112 @@
                     </div>
                 </div>
             </div>
+            
+            <!-- Google Sheets Configuration Modal -->
+            <div class="modal" id="googleSheetsModal" style="display: none;">
+                <div class="modal-content modal-large">
+                    <h3>📊 Configure Google Sheets</h3>
+                    <p>Connect your Google Sheet for automatic stock updates.</p>
+                    
+                    <div class="form-group">
+                        <label for="sheetsIdInput">Spreadsheet ID:</label>
+                        <input type="text" id="sheetsIdInput" placeholder="e.g., 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms">
+                        <small>Find this in your Google Sheet URL between /d/ and /edit</small>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="sheetNameInput">Sheet Name:</label>
+                        <input type="text" id="sheetNameInput" placeholder="STOCK COUNT" value="STOCK COUNT">
+                        <small>The name of the tab in your spreadsheet where stock is stored (Column A = Labels, Column B = Stock)</small>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="webAppUrlInput">Web App URL:</label>
+                        <input type="text" id="webAppUrlInput" placeholder="https://script.google.com/macros/s/...">
+                        <small>Deploy the Google Apps Script and paste the Web App URL here</small>
+                    </div>
+                    
+                    <div class="setup-instructions">
+                        <details>
+                            <summary>📋 How to set up Google Apps Script</summary>
+                            <ol>
+                                <li>Open your Google Sheet</li>
+                                <li>Go to <strong>Extensions → Apps Script</strong></li>
+                                <li>Delete any existing code and paste the script (see below)</li>
+                                <li>Save the script (Ctrl+S)</li>
+                                <li>Click <strong>Deploy → New deployment</strong></li>
+                                <li>Select <strong>"Web app"</strong> as the type</li>
+                                <li>Set "Execute as" to <strong>"Me"</strong></li>
+                                <li>Set "Who has access" to <strong>"Anyone"</strong></li>
+                                <li>Click Deploy and authorize</li>
+                                <li>Copy the Web App URL and paste it above</li>
+                            </ol>
+                            <div class="script-code">
+                                <p><strong>Google Apps Script Code:</strong></p>
+                                <pre id="appsScriptCode">
+function doPost(e) {
+  try {
+    var data = JSON.parse(e.postData.contents);
+    
+    if (data.action === 'deductStock') {
+      var sheetName = data.sheetName || 'Sheet1';
+      var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName);
+      
+      if (!sheet) {
+        return ContentService.createTextOutput(JSON.stringify({
+          success: false,
+          message: 'Sheet not found: ' + sheetName
+        })).setMimeType(ContentService.MimeType.JSON);
+      }
+      
+      var labelCounts = data.labelCounts;
+      var dataRange = sheet.getDataRange();
+      var values = dataRange.getValues();
+      
+      for (var label in labelCounts) {
+        var deductAmount = labelCounts[label];
+        for (var i = 1; i < values.length; i++) {
+          var cellLabel = String(values[i][0]).toLowerCase().trim();
+          var searchLabel = label.toLowerCase().trim();
+          
+          if (cellLabel === searchLabel) {
+            var currentStock = Number(values[i][1]) || 0;
+            var newStock = Math.max(0, currentStock - deductAmount);
+            sheet.getRange(i + 1, 2).setValue(newStock);
+            break;
+          }
+        }
+      }
+      
+      return ContentService.createTextOutput(JSON.stringify({
+        success: true
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+  } catch (error) {
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false,
+      message: error.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function doGet(e) {
+  return ContentService.createTextOutput(JSON.stringify({
+    status: 'ok'
+  })).setMimeType(ContentService.MimeType.JSON);
+}
+                                </pre>
+                                <button class="btn btn-copy" onclick="copyAppsScript()">📋 Copy Script</button>
+                            </div>
+                        </details>
+                    </div>
+                    
+                    <div class="modal-buttons">
+                        <button class="btn btn-secondary" id="cancelSheetsConfigBtn">Cancel</button>
+                        <button class="btn btn-primary" id="saveSheetsConfigBtn">Save Configuration</button>
+                    </div>
+                </div>
+            </div>
         </main>
 
         <footer>
@@ -129,5 +258,16 @@
     </div>
 
     <script src="script.js"></script>
+    <script>
+        function copyAppsScript() {
+            const scriptCode = document.getElementById('appsScriptCode').textContent;
+            navigator.clipboard.writeText(scriptCode.trim()).then(() => {
+                alert('✅ Script copied to clipboard!');
+            }).catch(err => {
+                console.error('Failed to copy:', err);
+                alert('Failed to copy. Please select and copy manually.');
+            });
+        }
+    </script>
 </body>
 </html>
