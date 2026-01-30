@@ -78,7 +78,14 @@ let PRIORITY_LABELS = [
     'sv12',
     'sv19',
     'sv23',
-    'sv24'
+    'sv24',
+    'bd38',
+    'ch-rk33',
+    'hr25',
+    'rk23',
+    'rk69',
+    'rk77',
+    'rk88'
 ];
 
 // Password for editing
