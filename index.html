@@ -128,6 +128,11 @@
 
             <!-- COUNTER TAB CONTENT -->
             <div id="counter-tab-content" class="tab-content">
+                <div class="counter-header-actions">
+                    <button class="btn btn-settings" id="labelCriteriaSettingsBtn" title="Configure label detection criteria">
+                        ⚙️ Label Detection Settings
+                    </button>
+                </div>
                 <section class="upload-section">
                     <div class="upload-area" id="counterUploadArea">
                         <div class="upload-icon">📊</div>
@@ -339,6 +344,57 @@ function doGet(e) {
                     <div class="modal-buttons">
                         <button class="btn btn-secondary" id="cancelSheetsConfigBtn">Cancel</button>
                         <button class="btn btn-primary" id="saveSheetsConfigBtn">Save Configuration</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Label Detection Criteria Settings Modal -->
+            <div class="modal" id="labelCriteriaModal" style="display: none;">
+                <div class="modal-content modal-large">
+                    <h3>⚙️ Label Detection Criteria Settings</h3>
+                    <p>Configure how labels are detected and categorized from different platforms.</p>
+                    
+                    <div class="criteria-section">
+                        <h4>🛒 Meesho Label Detection</h4>
+                        
+                        <div class="form-group">
+                            <label for="meeshoReturnAddressPattern">Return Address Pattern (Regex):</label>
+                            <input type="text" id="meeshoReturnAddressPattern" placeholder="/if\s+undelivered,?\s+return\s+to:?\s*([A-Za-z0-9_-]+)/i">
+                            <small>Regex pattern to extract return address from Meesho labels</small>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="meeshoCouriers">Courier Names (comma-separated):</label>
+                            <input type="text" id="meeshoCouriers" placeholder="DELHIVERY, SHADOWFAX, VALMO, XPRESS BEES">
+                            <small>List of courier names to identify Meesho labels (must include PICKUP keyword)</small>
+                        </div>
+                    </div>
+                    
+                    <div class="criteria-section">
+                        <h4>📦 Flipkart Label Detection</h4>
+                        
+                        <div class="form-group">
+                            <label for="flipkartShippingAddressKeyword">Shipping Address Keyword:</label>
+                            <input type="text" id="flipkartShippingAddressKeyword" placeholder="Shipping/Customer address:">
+                            <small>Keyword that identifies a Flipkart shipping label</small>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="flipkartSoldByPattern">Sold By Pattern (Regex):</label>
+                            <input type="text" id="flipkartSoldByPattern" placeholder="/Sold\s+By:?\s*([A-Za-z0-9\s_-]+?)(?:\s*,|\s*\n|\s*$|\s+[A-Z])/i">
+                            <small>Regex pattern to extract seller name from Flipkart labels</small>
+                        </div>
+                    </div>
+                    
+                    <div class="cloud-sync-info">
+                        <span class="cloud-icon">☁️</span>
+                        <span>Settings will be saved locally and synced to Google Sheets if configured</span>
+                    </div>
+                    
+                    <div class="modal-buttons">
+                        <button class="btn btn-secondary" id="cancelCriteriaBtn">Cancel</button>
+                        <button class="btn btn-secondary" id="resetCriteriaBtn">🔄 Reset to Defaults</button>
+                        <button class="btn btn-primary" id="saveCriteriaBtn">💾 Save Settings</button>
                     </div>
                 </div>
             </div>

@@ -1344,3 +1344,116 @@ footer {
         width: 100%;
     }
 }
+
+/* ============================================
+   LABEL DETECTION CRITERIA SETTINGS
+   ============================================ */
+
+.counter-header-actions {
+    display: flex;
+    justify-content: flex-end;
+    padding: 10px 0 20px 0;
+}
+
+.btn-settings {
+    background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+    color: white;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 8px;
+    font-size: 0.95rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.btn-settings:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+}
+
+.criteria-section {
+    background: #f8fafc;
+    padding: 20px;
+    border-radius: 10px;
+    margin-bottom: 20px;
+    border: 1px solid var(--border-color);
+}
+
+.criteria-section h4 {
+    color: var(--primary-color);
+    margin-bottom: 15px;
+    font-size: 1.1rem;
+}
+
+.form-group {
+    margin-bottom: 20px;
+}
+
+.form-group label {
+    display: block;
+    font-weight: 600;
+    margin-bottom: 8px;
+    color: var(--text-primary);
+}
+
+.form-group input[type="text"] {
+    width: 100%;
+    padding: 10px 12px;
+    border: 2px solid var(--border-color);
+    border-radius: 8px;
+    font-size: 0.95rem;
+    font-family: 'Courier New', monospace;
+    transition: border-color 0.3s ease;
+}
+
+.form-group input[type="text"]:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+}
+
+.form-group small {
+    display: block;
+    margin-top: 5px;
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+}
+
+.modal-buttons button {
+    margin: 0 5px;
+}
+
+.btn-reset {
+    background: var(--warning-color);
+    color: white;
+}
+
+.btn-reset:hover {
+    background: #d97706;
+}
+
+@media (max-width: 768px) {
+    .counter-header-actions {
+        justify-content: center;
+    }
+    
+    .btn-settings {
+        width: 100%;
+    }
+    
+    .criteria-section {
+        padding: 15px;
+    }
+    
+    .modal-buttons {
+        flex-direction: column;
+        gap: 10px;
+    }
+    
+    .modal-buttons button {
+        width: 100%;
+        margin: 0;
+    }
+}

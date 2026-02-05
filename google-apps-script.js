@@ -283,6 +283,10 @@ function doPost(e) {
       return handleSavePriorityLabels(data);
     }
     
+    if (data.action === 'saveLabelCriteria') {
+      return handleSaveLabelCriteria(data);
+    }
+    
     return ContentService.createTextOutput(JSON.stringify({
       success: false,
       message: 'Unknown action: ' + data.action
@@ -389,7 +393,7 @@ function handleDeductStock(data) {
 
 /**
  * Handles GET requests - useful for testing if the web app is working
- * Also handles getPriorityLabels action
+ * Also handles getPriorityLabels and getLabelCriteria actions
  */
 function doGet(e) {
   var action = e.parameter ? e.parameter.action : null;
@@ -399,11 +403,16 @@ function doGet(e) {
     return handleGetPriorityLabels();
   }
   
+  // Handle getLabelCriteria action
+  if (action === 'getLabelCriteria') {
+    return handleGetLabelCriteria();
+  }
+  
   return ContentService.createTextOutput(JSON.stringify({
     status: 'ok',
     message: 'JB Creations Stock Update API is running',
     timestamp: new Date().toISOString(),
-    availableActions: ['deductStock', 'savePriorityLabels', 'getPriorityLabels']
+    availableActions: ['deductStock', 'savePriorityLabels', 'getPriorityLabels', 'saveLabelCriteria', 'getLabelCriteria']
   })).setMimeType(ContentService.MimeType.JSON);
 }
 
@@ -569,6 +578,214 @@ function testPriorityLabels() {
   
   // Test getting
   var getResult = handleGetPriorityLabels();
+  Logger.log('Get Test Result: ' + getResult.getContent());
+}
+
+// ============================================
+// LABEL DETECTION CRITERIA MANAGEMENT
+// Store label detection criteria in a dedicated sheet
+// ============================================
+
+var LABEL_CRITERIA_SHEET_NAME = 'LABEL_CRITERIA';
+
+/**
+ * Get or create the label criteria sheet
+ */
+function getLabelCriteriaSheet() {
+  var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = spreadsheet.getSheetByName(LABEL_CRITERIA_SHEET_NAME);
+  
+  if (!sheet) {
+    // Create the sheet if it doesn't exist
+    sheet = spreadsheet.insertSheet(LABEL_CRITERIA_SHEET_NAME);
+    
+    // Add headers
+    sheet.getRange('A1').setValue('Setting Key');
+    sheet.getRange('B1').setValue('Setting Value');
+    sheet.getRange('A1:B1').setFontWeight('bold');
+    sheet.getRange('A1:B1').setBackground('#4a90d9');
+    sheet.getRange('A1:B1').setFontColor('white');
+    sheet.setColumnWidth(1, 250);
+    sheet.setColumnWidth(2, 400);
+    
+    Logger.log('Created new LABEL_CRITERIA sheet');
+  }
+  
+  return sheet;
+}
+
+/**
+ * Handle saving label detection criteria to Google Sheets
+ */
+function handleSaveLabelCriteria(data) {
+  try {
+    var criteria = data.criteria;
+    
+    if (!criteria) {
+      return ContentService.createTextOutput(JSON.stringify({
+        success: false,
+        message: 'No criteria provided'
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    var sheet = getLabelCriteriaSheet();
+    
+    // Clear existing criteria (except header)
+    var lastRow = sheet.getLastRow();
+    if (lastRow > 1) {
+      sheet.getRange(2, 1, lastRow - 1, 2).clear();
+    }
+    
+    // Write criteria as key-value pairs starting from row 2
+    var criteriaData = [
+      ['meesho.returnAddressPatternString', criteria.meesho.returnAddressPatternString || ''],
+      ['meesho.returnAddressFlags', criteria.meesho.returnAddressFlags || 'i'],
+      ['meesho.couriers', JSON.stringify(criteria.meesho.couriers || [])],
+      ['meesho.pickupKeyword', criteria.meesho.pickupKeyword || 'PICKUP'],
+      ['flipkart.shippingAddressKeyword', criteria.flipkart.shippingAddressKeyword || ''],
+      ['flipkart.soldByPatternString', criteria.flipkart.soldByPatternString || ''],
+      ['flipkart.soldByFlags', criteria.flipkart.soldByFlags || 'i']
+    ];
+    
+    sheet.getRange(2, 1, criteriaData.length, 2).setValues(criteriaData);
+    
+    // Add timestamp
+    sheet.getRange('C1').setValue('Last Updated');
+    sheet.getRange('C1').setFontWeight('bold');
+    sheet.getRange('C2').setValue(new Date().toISOString());
+    sheet.setColumnWidth(3, 180);
+    
+    Logger.log('Saved label detection criteria to sheet');
+    
+    return ContentService.createTextOutput(JSON.stringify({
+      success: true,
+      message: 'Label detection criteria saved successfully',
+      timestamp: new Date().toISOString()
+    })).setMimeType(ContentService.MimeType.JSON);
+    
+  } catch (error) {
+    Logger.log('Error saving label criteria: ' + error.toString());
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false,
+      message: 'Error saving criteria: ' + error.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+/**
+ * Handle getting label detection criteria from Google Sheets
+ */
+function handleGetLabelCriteria() {
+  try {
+    var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = spreadsheet.getSheetByName(LABEL_CRITERIA_SHEET_NAME);
+    
+    if (!sheet) {
+      Logger.log('Label criteria sheet not found, returning null');
+      return ContentService.createTextOutput(JSON.stringify({
+        success: true,
+        criteria: null,
+        message: 'Label criteria sheet not found - using defaults'
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    var lastRow = sheet.getLastRow();
+    
+    if (lastRow <= 1) {
+      // Only header exists, no criteria
+      return ContentService.createTextOutput(JSON.stringify({
+        success: true,
+        criteria: null,
+        message: 'No criteria found - using defaults'
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    // Get all criteria key-value pairs
+    var range = sheet.getRange(2, 1, lastRow - 1, 2);
+    var values = range.getValues();
+    
+    // Build criteria object
+    var criteria = {
+      meesho: {},
+      flipkart: {}
+    };
+    
+    for (var i = 0; i < values.length; i++) {
+      var key = values[i][0];
+      var value = values[i][1];
+      
+      if (key && value) {
+        var parts = key.split('.');
+        if (parts.length === 2) {
+          var platform = parts[0];
+          var setting = parts[1];
+          
+          // Parse JSON arrays
+          if (setting === 'couriers') {
+            try {
+              value = JSON.parse(value);
+            } catch (e) {
+              Logger.log('Error parsing couriers JSON: ' + e);
+            }
+          }
+          
+          criteria[platform][setting] = value;
+        }
+      }
+    }
+    
+    // Get last updated timestamp if available
+    var lastUpdated = null;
+    try {
+      lastUpdated = sheet.getRange('C2').getValue();
+    } catch (e) {}
+    
+    Logger.log('Retrieved label detection criteria from sheet');
+    
+    return ContentService.createTextOutput(JSON.stringify({
+      success: true,
+      criteria: criteria,
+      lastUpdated: lastUpdated ? lastUpdated.toString() : null,
+      message: 'Label detection criteria retrieved successfully'
+    })).setMimeType(ContentService.MimeType.JSON);
+    
+  } catch (error) {
+    Logger.log('Error getting label criteria: ' + error.toString());
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false,
+      criteria: null,
+      message: 'Error getting criteria: ' + error.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+/**
+ * Test function for label criteria
+ */
+function testLabelCriteria() {
+  // Test saving
+  var testSaveData = {
+    action: 'saveLabelCriteria',
+    criteria: {
+      meesho: {
+        returnAddressPatternString: 'if\\s+undelivered,?\\s+return\\s+to:?\\s*([A-Za-z0-9_-]+)',
+        returnAddressFlags: 'i',
+        couriers: ['DELHIVERY', 'SHADOWFAX', 'VALMO', 'XPRESS BEES'],
+        pickupKeyword: 'PICKUP'
+      },
+      flipkart: {
+        shippingAddressKeyword: 'Shipping/Customer address:',
+        soldByPatternString: 'Sold\\s+By:?\\s*([A-Za-z0-9\\s_-]+?)(?:\\s*,|\\s*\\n|\\s*$|\\s+[A-Z])',
+        soldByFlags: 'i'
+      }
+    }
+  };
+  
+  var saveResult = handleSaveLabelCriteria(testSaveData);
+  Logger.log('Save Test Result: ' + saveResult.getContent());
+  
+  // Test getting
+  var getResult = handleGetLabelCriteria();
   Logger.log('Get Test Result: ' + getResult.getContent());
 }
 

@@ -90,6 +90,120 @@ let PRIORITY_LABELS = [
 
 // Password for editing
 const EDIT_PASSWORD = '200274';
+const CRITERIA_PASSWORD = '200274'; // Same password for criteria settings
+
+// Default Label Detection Criteria
+const DEFAULT_LABEL_CRITERIA = {
+    meesho: {
+        returnAddressPattern: /if\s+undelivered,?\s+return\s+to:?\s*([A-Za-z0-9_-]+)/i,
+        returnAddressPatternString: "if\\s+undelivered,?\\s+return\\s+to:?\\s*([A-Za-z0-9_-]+)",
+        returnAddressFlags: "i",
+        couriers: ['DELHIVERY', 'SHADOWFAX', 'VALMO', 'XPRESS BEES'],
+        pickupKeyword: 'PICKUP'
+    },
+    flipkart: {
+        shippingAddressKeyword: 'Shipping/Customer address:',
+        soldByPattern: /Sold\s+By:?\s*([A-Za-z0-9\s_-]+?)(?:\s*,|\s*\n|\s*$|\s+[A-Z])/i,
+        soldByPatternString: "Sold\\s+By:?\\s*([A-Za-z0-9\\s_-]+?)(?:\\s*,|\\s*\\n|\\s*$|\\s+[A-Z])",
+        soldByFlags: "i"
+    }
+};
+
+// Load or initialize label detection criteria
+let LABEL_CRITERIA = loadLabelCriteria();
+
+function loadLabelCriteria() {
+    const stored = localStorage.getItem('labelDetectionCriteria');
+    if (stored) {
+        try {
+            const parsed = JSON.parse(stored);
+            // Reconstruct regex patterns from strings
+            if (parsed.meesho && parsed.meesho.returnAddressPatternString) {
+                parsed.meesho.returnAddressPattern = new RegExp(
+                    parsed.meesho.returnAddressPatternString,
+                    parsed.meesho.returnAddressFlags || 'i'
+                );
+            }
+            if (parsed.flipkart && parsed.flipkart.soldByPatternString) {
+                parsed.flipkart.soldByPattern = new RegExp(
+                    parsed.flipkart.soldByPatternString,
+                    parsed.flipkart.soldByFlags || 'i'
+                );
+            }
+            return parsed;
+        } catch (e) {
+            console.error('Error loading criteria:', e);
+            return JSON.parse(JSON.stringify(DEFAULT_LABEL_CRITERIA));
+        }
+    }
+    return JSON.parse(JSON.stringify(DEFAULT_LABEL_CRITERIA));
+}
+
+function saveLabelCriteria(criteria) {
+    // Store in localStorage
+    localStorage.setItem('labelDetectionCriteria', JSON.stringify(criteria));
+    LABEL_CRITERIA = criteria;
+    
+    // Also sync to Google Sheets if configured
+    syncCriteriaToGoogleSheets(criteria);
+}
+
+function resetLabelCriteriaToDefaults() {
+    const defaults = JSON.parse(JSON.stringify(DEFAULT_LABEL_CRITERIA));
+    saveLabelCriteria(defaults);
+    return defaults;
+}
+
+async function syncCriteriaToGoogleSheets(criteria) {
+    if (!GOOGLE_SHEETS_CONFIG.webAppUrl) {
+        console.log('Google Sheets not configured, skipping criteria sync');
+        return;
+    }
+    
+    try {
+        const response = await fetch(GOOGLE_SHEETS_CONFIG.webAppUrl, {
+            method: 'POST',
+            mode: 'no-cors',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                action: 'saveLabelCriteria',
+                criteria: criteria
+            })
+        });
+        console.log('Criteria synced to Google Sheets');
+    } catch (error) {
+        console.error('Error syncing criteria to Google Sheets:', error);
+    }
+}
+
+async function loadCriteriaFromGoogleSheets() {
+    if (!GOOGLE_SHEETS_CONFIG.webAppUrl) {
+        return null;
+    }
+    
+    try {
+        const response = await fetch(
+            `${GOOGLE_SHEETS_CONFIG.webAppUrl}?action=getLabelCriteria`,
+            {
+                method: 'GET',
+                mode: 'cors'
+            }
+        );
+        
+        if (response.ok) {
+            const data = await response.json();
+            if (data.success && data.criteria) {
+                return data.criteria;
+            }
+        }
+    } catch (error) {
+        console.error('Error loading criteria from Google Sheets:', error);
+    }
+    
+    return null;
+}
 
 // Google Sheets Configuration
 let GOOGLE_SHEETS_CONFIG = {
@@ -180,6 +294,17 @@ const counterGroupsContainer = document.getElementById('counterGroupsContainer')
 const counterTextOutput = document.getElementById('counterTextOutput');
 const copyCounterResultsBtn = document.getElementById('copyCounterResultsBtn');
 const copyFeedback = document.getElementById('copyFeedback');
+
+// Label Criteria Settings DOM Elements
+const labelCriteriaSettingsBtn = document.getElementById('labelCriteriaSettingsBtn');
+const labelCriteriaModal = document.getElementById('labelCriteriaModal');
+const meeshoReturnAddressPattern = document.getElementById('meeshoReturnAddressPattern');
+const meeshoCouriers = document.getElementById('meeshoCouriers');
+const flipkartShippingAddressKeyword = document.getElementById('flipkartShippingAddressKeyword');
+const flipkartSoldByPattern = document.getElementById('flipkartSoldByPattern');
+const saveCriteriaBtn = document.getElementById('saveCriteriaBtn');
+const cancelCriteriaBtn = document.getElementById('cancelCriteriaBtn');
+const resetCriteriaBtn = document.getElementById('resetCriteriaBtn');
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -355,6 +480,21 @@ function setupEventListeners() {
     // LABEL COUNTER EVENT LISTENERS
     // ===============================
     
+    // Label Criteria Settings Button
+    labelCriteriaSettingsBtn.addEventListener('click', () => showPasswordModal('labelCriteria'));
+    
+    // Criteria modal buttons
+    saveCriteriaBtn.addEventListener('click', saveLabelCriteriaSettings);
+    cancelCriteriaBtn.addEventListener('click', hideLabelCriteriaModal);
+    resetCriteriaBtn.addEventListener('click', resetLabelCriteriaSettings);
+    
+    // Click outside criteria modal to close
+    labelCriteriaModal.addEventListener('click', (e) => {
+        if (e.target === labelCriteriaModal) {
+            hideLabelCriteriaModal();
+        }
+    });
+    
     // Counter file input
     counterFileInput.addEventListener('change', handleCounterFileSelect);
     
@@ -524,16 +664,18 @@ function extractLabelInfo(text, fileName, pageNum) {
     // CHECK FOR MEESHO LABELS
     // Pattern: "If undelivered, return to: XXXXX" + courier with PICKUP
     // ========================================
-    const returnAddressPattern = /if\s+undelivered,?\s+return\s+to:?\s*([A-Za-z0-9_-]+)/i;
+    // Use configurable pattern
+    const returnAddressPattern = LABEL_CRITERIA.meesho.returnAddressPattern;
     const returnMatch = text.match(returnAddressPattern);
     
     if (returnMatch && returnMatch[1]) {
         // This is a Meesho label - check for courier with PICKUP
-        const couriers = ['DELHIVERY', 'SHADOWFAX', 'VALMO', 'XPRESS BEES'];
+        const couriers = LABEL_CRITERIA.meesho.couriers;
+        const pickupKeyword = LABEL_CRITERIA.meesho.pickupKeyword;
         let detectedCourier = null;
         
         for (const courier of couriers) {
-            if (textUpper.includes(courier) && textUpper.includes('PICKUP')) {
+            if (textUpper.includes(courier) && textUpper.includes(pickupKeyword)) {
                 detectedCourier = courier;
                 break;
             }
@@ -552,9 +694,10 @@ function extractLabelInfo(text, fileName, pageNum) {
     // CHECK FOR FLIPKART LABELS
     // Pattern: "Shipping/Customer address:" + "Sold By: XXXXX"
     // ========================================
-    if (text.includes('Shipping/Customer address:') || textUpper.includes('SHIPPING/CUSTOMER ADDRESS:')) {
+    const shippingKeyword = LABEL_CRITERIA.flipkart.shippingAddressKeyword;
+    if (text.includes(shippingKeyword) || textUpper.includes(shippingKeyword.toUpperCase())) {
         // This is a Flipkart label - look for Sold By
-        const soldByPattern = /Sold\s+By:?\s*([A-Za-z0-9\s_-]+?)(?:\s*,|\s*\n|\s*$|\s+[A-Z])/i;
+        const soldByPattern = LABEL_CRITERIA.flipkart.soldByPattern;
         const soldByMatch = text.match(soldByPattern);
         
         if (soldByMatch && soldByMatch[1]) {
@@ -1162,23 +1305,24 @@ function detectPlatformFromFilename(filename) {
 
 /**
  * Detect platform from page text content (more accurate than filename)
- * Uses same logic as label counter section
+ * Uses same logic as label counter section with configurable criteria
  */
 function detectPlatformFromText(text) {
     const textUpper = text.toUpperCase();
     
     // CHECK FOR MEESHO LABELS
     // Pattern: "If undelivered, return to: XXXXX" + courier with PICKUP
-    const returnAddressPattern = /if\s+undelivered,?\s+return\s+to:?\s*([A-Za-z0-9_-]+)/i;
+    const returnAddressPattern = LABEL_CRITERIA.meesho.returnAddressPattern;
     const returnMatch = text.match(returnAddressPattern);
     
     if (returnMatch && returnMatch[1]) {
         // Check for courier with PICKUP to confirm it's Meesho
-        const couriers = ['DELHIVERY', 'SHADOWFAX', 'VALMO', 'XPRESS BEES'];
+        const couriers = LABEL_CRITERIA.meesho.couriers;
+        const pickupKeyword = LABEL_CRITERIA.meesho.pickupKeyword;
         let hasCourier = false;
         
         for (const courier of couriers) {
-            if (textUpper.includes(courier) && textUpper.includes('PICKUP')) {
+            if (textUpper.includes(courier) && textUpper.includes(pickupKeyword)) {
                 hasCourier = true;
                 break;
             }
@@ -1202,8 +1346,9 @@ function detectPlatformFromText(text) {
     
     // CHECK FOR FLIPKART LABELS
     // Pattern: "Shipping/Customer address:" + "Sold By: XXXXX"
-    if (text.includes('Shipping/Customer address:') || textUpper.includes('SHIPPING/CUSTOMER ADDRESS:')) {
-        const soldByPattern = /Sold\s+By:?\s*([A-Za-z0-9\s_-]+?)(?:\s*,|\s*\n|\s*$|\s+[A-Z])/i;
+    const shippingKeyword = LABEL_CRITERIA.flipkart.shippingAddressKeyword;
+    if (text.includes(shippingKeyword) || textUpper.includes(shippingKeyword.toUpperCase())) {
+        const soldByPattern = LABEL_CRITERIA.flipkart.soldByPattern;
         const soldByMatch = text.match(soldByPattern);
         
         if (soldByMatch && soldByMatch[1]) {
@@ -1577,6 +1722,8 @@ function checkPassword() {
             showEditLabelsModal();
         } else if (pendingPasswordAction === 'googleSheets') {
             showGoogleSheetsModal();
+        } else if (pendingPasswordAction === 'labelCriteria') {
+            showLabelCriteriaModal();
         }
         pendingPasswordAction = null;
     } else {
@@ -1962,3 +2109,115 @@ function doGet(e) {
 9. Click Deploy and authorize
 10. Copy the Web App URL and paste it in the website configuration
 */
+
+// ============================================
+// LABEL DETECTION CRITERIA SETTINGS
+// ============================================
+
+function showLabelCriteriaModal() {
+    if (!labelCriteriaModal) return;
+    
+    // Load current criteria into form fields
+    meeshoReturnAddressPattern.value = LABEL_CRITERIA.meesho.returnAddressPatternString || 
+        DEFAULT_LABEL_CRITERIA.meesho.returnAddressPatternString;
+    meeshoCouriers.value = (LABEL_CRITERIA.meesho.couriers || DEFAULT_LABEL_CRITERIA.meesho.couriers).join(', ');
+    flipkartShippingAddressKeyword.value = LABEL_CRITERIA.flipkart.shippingAddressKeyword || 
+        DEFAULT_LABEL_CRITERIA.flipkart.shippingAddressKeyword;
+    flipkartSoldByPattern.value = LABEL_CRITERIA.flipkart.soldByPatternString || 
+        DEFAULT_LABEL_CRITERIA.flipkart.soldByPatternString;
+    
+    labelCriteriaModal.style.display = 'flex';
+}
+
+function hideLabelCriteriaModal() {
+    if (!labelCriteriaModal) return;
+    labelCriteriaModal.style.display = 'none';
+}
+
+async function saveLabelCriteriaSettings() {
+    try {
+        // Validate regex patterns
+        const meeshoPatternString = meeshoReturnAddressPattern.value.trim();
+        const flipkartPatternString = flipkartSoldByPattern.value.trim();
+        
+        if (!meeshoPatternString || !flipkartPatternString) {
+            alert('Please fill in all pattern fields!');
+            return;
+        }
+        
+        // Test regex patterns
+        try {
+            new RegExp(meeshoPatternString, 'i');
+            new RegExp(flipkartPatternString, 'i');
+        } catch (e) {
+            alert('Invalid regex pattern! Please check your patterns.\n\nError: ' + e.message);
+            return;
+        }
+        
+        // Parse courier list
+        const couriersList = meeshoCouriers.value.split(',')
+            .map(c => c.trim().toUpperCase())
+            .filter(c => c.length > 0);
+        
+        if (couriersList.length === 0) {
+            alert('Please enter at least one courier name!');
+            return;
+        }
+        
+        // Show saving indicator
+        saveCriteriaBtn.disabled = true;
+        saveCriteriaBtn.textContent = '⏳ Saving...';
+        
+        // Create new criteria object
+        const newCriteria = {
+            meesho: {
+                returnAddressPattern: new RegExp(meeshoPatternString, 'i'),
+                returnAddressPatternString: meeshoPatternString,
+                returnAddressFlags: 'i',
+                couriers: couriersList,
+                pickupKeyword: 'PICKUP'
+            },
+            flipkart: {
+                shippingAddressKeyword: flipkartShippingAddressKeyword.value.trim(),
+                soldByPattern: new RegExp(flipkartPatternString, 'i'),
+                soldByPatternString: flipkartPatternString,
+                soldByFlags: 'i'
+            }
+        };
+        
+        // Save the criteria
+        saveLabelCriteria(newCriteria);
+        
+        // Reset button
+        saveCriteriaBtn.disabled = false;
+        saveCriteriaBtn.textContent = '💾 Save Settings';
+        
+        // Hide modal
+        hideLabelCriteriaModal();
+        
+        alert('✅ Label detection criteria saved successfully!\n\nThe new criteria will be used for all future label processing.');
+        
+    } catch (error) {
+        console.error('Error saving criteria:', error);
+        alert('Error saving criteria: ' + error.message);
+        saveCriteriaBtn.disabled = false;
+        saveCriteriaBtn.textContent = '💾 Save Settings';
+    }
+}
+
+function resetLabelCriteriaSettings() {
+    if (!confirm('Are you sure you want to reset all criteria to default values?\n\nThis cannot be undone.')) {
+        return;
+    }
+    
+    const defaults = resetLabelCriteriaToDefaults();
+    
+    // Update form fields
+    meeshoReturnAddressPattern.value = defaults.meesho.returnAddressPatternString;
+    meeshoCouriers.value = defaults.meesho.couriers.join(', ');
+    flipkartShippingAddressKeyword.value = defaults.flipkart.shippingAddressKeyword;
+    flipkartSoldByPattern.value = defaults.flipkart.soldByPatternString;
+    
+    alert('✅ Criteria reset to default values!');
+}
+
