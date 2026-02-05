@@ -1348,71 +1348,20 @@ function displayResults(total, matched, unmatched, labels, allPages, labelCounts
     
     platformBreakdownStats.innerHTML = breakdownHtml;
     
-    // Display matched labels WITH COUNTS
+    // Display matched labels WITH COUNTS (sorted by count, high to low)
     const labelChips = document.getElementById('labelChips');
-    labelChips.innerHTML = labels.map(label => {
+    // Sort labels by count in descending order
+    const sortedLabels = labels.sort((a, b) => (labelCounts[b] || 0) - (labelCounts[a] || 0));
+    labelChips.innerHTML = sortedLabels.map(label => {
         const count = labelCounts[label] || 0;
         return `<span class="label-chip">${label} <span class="label-count">×${count}</span></span>`;
     }).join('');
-    
-    // Display detailed label occurrence table
-    displayLabelOccurrenceTable(labelCounts);
     
     // Show results section
     resultsSection.style.display = 'block';
     
     // Scroll to results
     resultsSection.scrollIntoView({ behavior: 'smooth' });
-}
-
-function displayLabelOccurrenceTable(labelCounts) {
-    const container = document.getElementById('labelOccurrenceTable');
-    if (!container) return;
-    
-    const labels = Object.keys(labelCounts);
-    if (labels.length === 0) {
-        container.innerHTML = '<p>No priority labels found in the processed PDFs.</p>';
-        return;
-    }
-    
-    // Sort labels by count (descending)
-    labels.sort((a, b) => labelCounts[b] - labelCounts[a]);
-    
-    let tableHtml = `
-        <table class="occurrence-table">
-            <thead>
-                <tr>
-                    <th>Priority Label</th>
-                    <th>Occurrences</th>
-                </tr>
-            </thead>
-            <tbody>
-    `;
-    
-    let totalOccurrences = 0;
-    labels.forEach(label => {
-        const count = labelCounts[label];
-        totalOccurrences += count;
-        tableHtml += `
-            <tr>
-                <td>${label}</td>
-                <td class="count-cell">${count}</td>
-            </tr>
-        `;
-    });
-    
-    tableHtml += `
-            </tbody>
-            <tfoot>
-                <tr class="total-row">
-                    <td><strong>Total</strong></td>
-                    <td class="count-cell"><strong>${totalOccurrences}</strong></td>
-                </tr>
-            </tfoot>
-        </table>
-    `;
-    
-    container.innerHTML = tableHtml;
 }
 
 async function downloadSortedPDF() {
