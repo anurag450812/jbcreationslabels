@@ -991,7 +991,7 @@ function handleFileSelect(e) {
     }
 }
 
-function handleFiles(files) {
+async function handleFiles(files) {
     // Merge with existing files instead of replacing
     const existingFileNames = new Set(uploadedFiles.map(f => f.name));
     const newFiles = files.filter(f => !existingFileNames.has(f.name));
@@ -1002,9 +1002,6 @@ function handleFiles(files) {
     if (uploadedFiles.length > 0) {
         processBtn.disabled = false;
         clearBtn.style.display = 'block';
-        
-        // Detect platforms from filenames
-        const platformCounts = detectPlatforms(uploadedFiles);
         
         // Update upload area text
         const uploadText = uploadArea.querySelector('h2');
@@ -1018,64 +1015,50 @@ function handleFiles(files) {
         }
         uploadSubtext.textContent = displayNames.join(', ');
         
-        // Display platform info
-        displayPlatformInfo(platformCounts);
+        // Get file info with page counts
+        const fileInfoList = await detectPlatforms(uploadedFiles);
+        
+        // Display file info
+        displayPlatformInfo(fileInfoList);
     }
 }
 
-function detectPlatforms(files) {
-    const counts = {
-        flipkart: 0,
-        amazon: 0,
-        meesho: 0,
-        unknown: 0
-    };
-    
-    files.forEach(file => {
-        const fileName = file.name.toLowerCase();
-        if (fileName.includes('flipkart')) {
-            counts.flipkart++;
-        } else if (fileName.includes('amazon')) {
-            counts.amazon++;
-        } else if (fileName.includes('meesho')) {
-            counts.meesho++;
-        } else {
-            counts.unknown++;
+async function detectPlatforms(files) {
+    // Get page counts for each file
+    const fileInfoPromises = files.map(async (file) => {
+        try {
+            const arrayBuffer = await file.arrayBuffer();
+            const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+            return {
+                name: file.name,
+                pageCount: pdf.numPages
+            };
+        } catch (error) {
+            console.error(`Error reading ${file.name}:`, error);
+            return {
+                name: file.name,
+                pageCount: 0
+            };
         }
     });
     
-    return counts;
+    return await Promise.all(fileInfoPromises);
 }
 
-function displayPlatformInfo(counts) {
-    const platforms = [
-        { name: 'Flipkart', key: 'flipkart', icon: '🛒' },
-        { name: 'Amazon', key: 'amazon', icon: '📦' },
-        { name: 'Meesho', key: 'meesho', icon: '🛍️' }
-    ];
-    
+function displayPlatformInfo(fileInfoList) {
     let html = '';
-    platforms.forEach(platform => {
-        if (counts[platform.key] > 0) {
-            html += `
-                <div class="platform-stat">
-                    <div class="platform-stat-icon">${platform.icon}</div>
-                    <span class="platform-stat-name">${platform.name}</span>
-                    <span class="platform-stat-count">${counts[platform.key]} file(s)</span>
-                </div>
-            `;
-        }
-    });
     
-    if (counts.unknown > 0) {
+    fileInfoList.forEach(fileInfo => {
         html += `
             <div class="platform-stat">
-                <div class="platform-stat-icon">❓</div>
-                <span class="platform-stat-name">Unknown</span>
-                <span class="platform-stat-count">${counts.unknown} file(s)</span>
+                <div class="platform-stat-icon">📄</div>
+                <div class="platform-stat-content">
+                    <span class="platform-stat-name">${fileInfo.name}</span>
+                    <span class="platform-stat-count">${fileInfo.pageCount} page${fileInfo.pageCount !== 1 ? 's' : ''}</span>
+                </div>
             </div>
         `;
-    }
+    });
     
     platformStats.innerHTML = html;
     platformInfo.style.display = 'block';
@@ -1141,19 +1124,27 @@ async function extractPagesFromPDF(file) {
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
     const pages = [];
     
-    // Detect platform from filename
-    const platform = detectPlatformFromFilename(file.name);
+    // Detect platform from filename as fallback
+    const filenamePlatform = detectPlatformFromFilename(file.name);
     
     for (let i = 1; i <= pdf.numPages; i++) {
         const page = await pdf.getPage(i);
         const textContent = await page.getTextContent();
         const text = textContent.items.map(item => item.str).join(' ');
         
+        // Detect platform from text content (more accurate)
+        const textDetection = detectPlatformFromText(text);
+        
+        // Use text-based detection if available, otherwise use filename
+        const platform = textDetection.platform !== 'unknown' ? textDetection.platform : filenamePlatform;
+        const subGroup = textDetection.subGroup;
+        
         pages.push({
             fileName: file.name,
             pageNumber: i,
             text: text.toLowerCase(),
             platform: platform,
+            subGroup: subGroup,  // Store sub-group info (XID, JBCREATIONS, seller name, etc.)
             fileRef: file  // Store file reference instead of ArrayBuffer
         });
     }
@@ -1167,6 +1158,75 @@ function detectPlatformFromFilename(filename) {
     if (name.includes('amazon')) return 'amazon';
     if (name.includes('meesho')) return 'meesho';
     return 'unknown';
+}
+
+/**
+ * Detect platform from page text content (more accurate than filename)
+ * Uses same logic as label counter section
+ */
+function detectPlatformFromText(text) {
+    const textUpper = text.toUpperCase();
+    
+    // CHECK FOR MEESHO LABELS
+    // Pattern: "If undelivered, return to: XXXXX" + courier with PICKUP
+    const returnAddressPattern = /if\s+undelivered,?\s+return\s+to:?\s*([A-Za-z0-9_-]+)/i;
+    const returnMatch = text.match(returnAddressPattern);
+    
+    if (returnMatch && returnMatch[1]) {
+        // Check for courier with PICKUP to confirm it's Meesho
+        const couriers = ['DELHIVERY', 'SHADOWFAX', 'VALMO', 'XPRESS BEES'];
+        let hasCourier = false;
+        
+        for (const courier of couriers) {
+            if (textUpper.includes(courier) && textUpper.includes('PICKUP')) {
+                hasCourier = true;
+                break;
+            }
+        }
+        
+        if (hasCourier) {
+            const returnAddress = returnMatch[1].toUpperCase();
+            
+            // Identify sub-group: G-XID, XIDXID, JBCREATIONS, etc.
+            if (returnAddress.includes('XID') || returnAddress === 'XIDXID') {
+                return { platform: 'meesho', subGroup: returnAddress };
+            } else if (returnAddress.includes('JB') || returnAddress.includes('JBCREATION')) {
+                return { platform: 'meesho', subGroup: returnAddress };
+            } else if (returnAddress.startsWith('G-')) {
+                return { platform: 'meesho', subGroup: returnAddress };
+            } else {
+                return { platform: 'meesho', subGroup: returnAddress };
+            }
+        }
+    }
+    
+    // CHECK FOR FLIPKART LABELS
+    // Pattern: "Shipping/Customer address:" + "Sold By: XXXXX"
+    if (text.includes('Shipping/Customer address:') || textUpper.includes('SHIPPING/CUSTOMER ADDRESS:')) {
+        const soldByPattern = /Sold\s+By:?\s*([A-Za-z0-9\s_-]+?)(?:\s*,|\s*\n|\s*$|\s+[A-Z])/i;
+        const soldByMatch = text.match(soldByPattern);
+        
+        if (soldByMatch && soldByMatch[1]) {
+            const sellerName = soldByMatch[1].trim().toUpperCase();
+            
+            // Check if it's JB CREATIONS or similar
+            if (sellerName.includes('JB CREATION') || sellerName.includes('JB CREATION')) {
+                return { platform: 'flipkart', subGroup: sellerName };
+            } else {
+                return { platform: 'flipkart', subGroup: sellerName };
+            }
+        } else {
+            return { platform: 'flipkart', subGroup: 'UNKNOWN SELLER' };
+        }
+    }
+    
+    // CHECK FOR AMAZON (basic detection)
+    if (textUpper.includes('AMAZON') || textUpper.includes('AMAZON.IN')) {
+        return { platform: 'amazon', subGroup: 'AMAZON' };
+    }
+    
+    // No platform detected
+    return { platform: 'unknown', subGroup: 'UNKNOWN' };
 }
 
 function sortPages(pages) {
@@ -1299,7 +1359,7 @@ function displayResults(total, matched, unmatched, labels, allPages, labelCounts
     document.getElementById('matchedPages').textContent = matched;
     document.getElementById('unmatchedPages').textContent = unmatched;
     
-    // Calculate platform breakdown
+    // Calculate comprehensive platform breakdown with sub-groups
     const platformCounts = {
         flipkart: 0,
         amazon: 0,
@@ -1307,43 +1367,132 @@ function displayResults(total, matched, unmatched, labels, allPages, labelCounts
         unknown: 0
     };
     
+    const subGroupCounts = {
+        flipkart: {},
+        meesho: {},
+        amazon: {}
+    };
+    
     allPages.forEach(page => {
         if (platformCounts.hasOwnProperty(page.platform)) {
             platformCounts[page.platform]++;
+            
+            // Count sub-groups (XID, JB CREATIONS, seller names, etc.)
+            if (page.subGroup && page.subGroup !== 'UNKNOWN') {
+                if (!subGroupCounts[page.platform][page.subGroup]) {
+                    subGroupCounts[page.platform][page.subGroup] = 0;
+                }
+                subGroupCounts[page.platform][page.subGroup]++;
+            }
         }
     });
     
-    // Display platform breakdown
+    // Display comprehensive platform breakdown
     const platformBreakdownStats = document.getElementById('platformBreakdownStats');
-    const platforms = [
-        { name: 'Flipkart', key: 'flipkart', icon: '🛒' },
-        { name: 'Amazon', key: 'amazon', icon: '📦' },
-        { name: 'Meesho', key: 'meesho', icon: '🛍️' }
-    ];
-    
     let breakdownHtml = '';
-    platforms.forEach(platform => {
-        if (platformCounts[platform.key] > 0) {
-            breakdownHtml += `
-                <div class="platform-breakdown-item">
-                    <div class="platform-breakdown-icon">${platform.icon}</div>
-                    <span class="platform-breakdown-name">${platform.name}</span>
-                    <span class="platform-breakdown-count">${platformCounts[platform.key]}</span>
-                    <span class="platform-breakdown-label">pages processed</span>
-                </div>
-            `;
-        }
-    });
     
-    if (platformCounts.unknown > 0) {
+    // MEESHO Section with sub-groups
+    if (platformCounts.meesho > 0) {
+        breakdownHtml += `<div class="platform-section meesho-section">`;
         breakdownHtml += `
-            <div class="platform-breakdown-item">
+            <div class="platform-breakdown-item platform-breakdown-main">
+                <div class="platform-breakdown-icon">🛍️</div>
+                <span class="platform-breakdown-name">Meesho</span>
+                <span class="platform-breakdown-count">${platformCounts.meesho}</span>
+                <span class="platform-breakdown-label">pages processed</span>
+            </div>
+        `;
+        
+        // Show sub-groups (XID, JBCREATIONS, G-XID, etc.)
+        const meeshoSubGroups = Object.entries(subGroupCounts.meesho);
+        if (meeshoSubGroups.length > 0) {
+            // Sort sub-groups: JB-related first, then alphabetically
+            meeshoSubGroups.sort((a, b) => {
+                const aIsJB = a[0].includes('JB') || a[0].includes('JBCREATION');
+                const bIsJB = b[0].includes('JB') || b[0].includes('JBCREATION');
+                if (aIsJB && !bIsJB) return -1;
+                if (!aIsJB && bIsJB) return 1;
+                return a[0].localeCompare(b[0]);
+            });
+            
+            meeshoSubGroups.forEach(([subGroup, count]) => {
+                breakdownHtml += `
+                    <div class="platform-breakdown-item platform-breakdown-sub">
+                        <div class="platform-breakdown-icon">↳</div>
+                        <span class="platform-breakdown-name">${subGroup}</span>
+                        <span class="platform-breakdown-count">${count}</span>
+                        <span class="platform-breakdown-label">labels</span>
+                    </div>
+                `;
+            });
+        }
+        breakdownHtml += `</div>`; // Close meesho-section
+    }
+    
+    // FLIPKART Section with sellers
+    if (platformCounts.flipkart > 0) {
+        breakdownHtml += `<div class="platform-section flipkart-section">`;
+        breakdownHtml += `
+            <div class="platform-breakdown-item platform-breakdown-main">
+                <div class="platform-breakdown-icon">🛒</div>
+                <span class="platform-breakdown-name">Flipkart</span>
+                <span class="platform-breakdown-count">${platformCounts.flipkart}</span>
+                <span class="platform-breakdown-label">pages processed</span>
+            </div>
+        `;
+        
+        // Show sellers
+        const flipkartSellers = Object.entries(subGroupCounts.flipkart);
+        if (flipkartSellers.length > 0) {
+            // Sort sellers: JB CREATIONS first, then alphabetically
+            flipkartSellers.sort((a, b) => {
+                const aIsJB = a[0].includes('JB CREATION');
+                const bIsJB = b[0].includes('JB CREATION');
+                if (aIsJB && !bIsJB) return -1;
+                if (!aIsJB && bIsJB) return 1;
+                return a[0].localeCompare(b[0]);
+            });
+            
+            flipkartSellers.forEach(([seller, count]) => {
+                breakdownHtml += `
+                    <div class="platform-breakdown-item platform-breakdown-sub">
+                        <div class="platform-breakdown-icon">↳</div>
+                        <span class="platform-breakdown-name">${seller}</span>
+                        <span class="platform-breakdown-count">${count}</span>
+                        <span class="platform-breakdown-label">labels</span>
+                    </div>
+                `;
+            });
+        }
+        breakdownHtml += `</div>`; // Close flipkart-section
+    }
+    
+    // AMAZON Section
+    if (platformCounts.amazon > 0) {
+        breakdownHtml += `<div class="platform-section amazon-section">`;
+        breakdownHtml += `
+            <div class="platform-breakdown-item platform-breakdown-main">
+                <div class="platform-breakdown-icon">📦</div>
+                <span class="platform-breakdown-name">Amazon</span>
+                <span class="platform-breakdown-count">${platformCounts.amazon}</span>
+                <span class="platform-breakdown-label">pages processed</span>
+            </div>
+        `;
+        breakdownHtml += `</div>`; // Close amazon-section
+    }
+    
+    // UNKNOWN Section
+    if (platformCounts.unknown > 0) {
+        breakdownHtml += `<div class="platform-section unknown-section">`;
+        breakdownHtml += `
+            <div class="platform-breakdown-item platform-breakdown-main">
                 <div class="platform-breakdown-icon">❓</div>
                 <span class="platform-breakdown-name">Unknown</span>
                 <span class="platform-breakdown-count">${platformCounts.unknown}</span>
                 <span class="platform-breakdown-label">pages processed</span>
             </div>
         `;
+        breakdownHtml += `</div>`; // Close unknown-section
     }
     
     platformBreakdownStats.innerHTML = breakdownHtml;

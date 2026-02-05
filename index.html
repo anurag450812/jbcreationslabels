@@ -45,9 +45,9 @@
             </section>
 
             <section class="platform-info" id="platformInfo" style="display: none;">
-                <h3>📋 Detected Platforms</h3>
+                <h3>� Uploaded Files</h3>
                 <div class="platform-stats" id="platformStats">
-                    <!-- Platform counts will be displayed here -->
+                    <!-- File names and page counts will be displayed here -->
                 </div>
             </section>
 
@@ -64,6 +64,12 @@
             <section class="results-section" id="resultsSection" style="display: none;">
                 <div class="results-card">
                     <h3>📊 Sorting Results</h3>
+                    
+                    <div class="platform-breakdown" id="platformBreakdown">
+                        <h4>📦 Platform Breakdown</h4>
+                        <div class="platform-breakdown-stats" id="platformBreakdownStats"></div>
+                    </div>
+                    
                     <div class="stats">
                         <div class="stat-item">
                             <span class="stat-value" id="totalPages">0</span>
@@ -77,11 +83,6 @@
                             <span class="stat-value" id="unmatchedPages">0</span>
                             <span class="stat-label">Other Labels</span>
                         </div>
-                    </div>
-                    
-                    <div class="platform-breakdown" id="platformBreakdown">
-                        <h4>📦 Platform Breakdown</h4>
-                        <div class="platform-breakdown-stats" id="platformBreakdownStats"></div>
                     </div>
                     
                     <div class="matched-labels" id="matchedLabels">

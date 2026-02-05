@@ -180,7 +180,7 @@ section {
 /* Platform Info */
 .platform-info {
     background: var(--card-bg);
-    padding: 30px;
+    padding: 20px;
     border-radius: 15px;
     box-shadow: var(--shadow);
 }
@@ -189,40 +189,50 @@ section {
     margin-bottom: 20px;
     color: var(--text-primary);
     text-align: center;
+    font-size: 1.3rem;
 }
 
 .platform-stats {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-    gap: 15px;
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    gap: 12px;
 }
 
 .platform-stat {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    padding: 20px;
-    border-radius: 12px;
-    text-align: center;
-    color: white;
-    box-shadow: var(--shadow);
+    background: linear-gradient(135deg, #f8fafc 0%, #e0e7ff 100%);
+    padding: 12px 15px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    border: 1px solid var(--border-color);
 }
 
 .platform-stat-icon {
-    font-size: 2rem;
-    margin-bottom: 10px;
+    font-size: 1.5rem;
+    flex-shrink: 0;
+}
+
+.platform-stat-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
 }
 
 .platform-stat-name {
-    display: block;
-    font-size: 1.1rem;
     font-weight: 600;
-    margin-bottom: 5px;
+    color: var(--text-primary);
+    font-size: 0.9rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .platform-stat-count {
-    display: block;
-    font-size: 1.5rem;
-    font-weight: 700;
-    opacity: 0.9;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
 }
 
 /* Status Section */
@@ -334,44 +344,99 @@ section {
 
 .platform-breakdown-stats {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-    gap: 15px;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 12px;
+}
+
+/* Platform sections for grouping (Meesho, Flipkart, etc.) */
+.platform-section {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 12px;
+    padding: 15px;
+    border-radius: 10px;
+    background: transparent;
+    margin-bottom: 15px;
+    border: 2px dashed var(--border-color);
+}
+
+.meesho-section {
+    border-color: #10b981;
+    background: linear-gradient(135deg, rgba(16, 185, 129, 0.05) 0%, rgba(16, 185, 129, 0.02) 100%);
+}
+
+.flipkart-section {
+    border-color: #3b82f6;
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.05) 0%, rgba(59, 130, 246, 0.02) 100%);
+}
+
+.amazon-section {
+    border-color: #f59e0b;
+    background: linear-gradient(135deg, rgba(245, 158, 11, 0.05) 0%, rgba(245, 158, 11, 0.02) 100%);
+}
+
+.unknown-section {
+    border-color: #94a3b8;
+    background: linear-gradient(135deg, rgba(148, 163, 184, 0.05) 0%, rgba(148, 163, 184, 0.02) 100%);
 }
 
 .platform-breakdown-item {
     background: white;
-    padding: 20px;
-    border-radius: 10px;
-    text-align: center;
+    padding: 15px;
+    border-radius: 8px;
     border: 2px solid var(--border-color);
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+/* Main platform items (Meesho, Flipkart, Amazon) */
+.platform-breakdown-main {
+    background: linear-gradient(135deg, #f8fafc 0%, #e0e7ff 100%);
+    border: 2px solid var(--primary-color);
+    font-weight: 600;
+}
+
+/* Sub-group items (XID, JBCREATIONS, seller names) */
+.platform-breakdown-sub {
+    margin-left: 0;
+    background: white;
+    border: 1px solid var(--border-color);
+    padding: 12px 15px;
+    grid-column: span 1;
 }
 
 .platform-breakdown-icon {
-    font-size: 2rem;
-    margin-bottom: 10px;
+    font-size: 1.5rem;
+    flex-shrink: 0;
 }
 
 .platform-breakdown-name {
-    display: block;
-    font-size: 1rem;
+    flex: 1;
+    font-size: 0.9rem;
     font-weight: 600;
     color: var(--text-primary);
-    margin-bottom: 8px;
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .platform-breakdown-count {
-    display: block;
-    font-size: 1.8rem;
+    font-size: 1.3rem;
     font-weight: 700;
     color: var(--primary-color);
+    flex-shrink: 0;
 }
 
 .platform-breakdown-label {
-    display: block;
-    font-size: 0.85rem;
+    font-size: 0.75rem;
     color: var(--text-secondary);
-    margin-top: 5px;
+    flex-shrink: 0;
+    min-width: 60px;
+    text-align: right;
 }
 
 .label-chips {
