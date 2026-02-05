@@ -14,9 +14,19 @@
         <header>
             <h1>🏷️ JB Creations - Shipping Label Sorter</h1>
             <p>Upload your Flipkart, Amazon, and Meesho shipping labels together - automatic platform detection</p>
+            <nav class="tab-nav">
+                <button class="tab-btn active" data-tab="sorting" onclick="switchTab('sorting')">
+                    📋 Label Sorting
+                </button>
+                <button class="tab-btn" data-tab="counter" onclick="switchTab('counter')">
+                    🔢 Label Counter
+                </button>
+            </nav>
         </header>
 
         <main>
+            <!-- SORTING TAB CONTENT -->
+            <div id="sorting-tab-content" class="tab-content active">
             <section class="upload-section">
                 <div class="upload-area" id="uploadArea">
                     <div class="upload-icon">📤</div>
@@ -117,6 +127,88 @@
                     ⚙️ Configure Google Sheets
                 </button>
             </section>
+            </div>
+            <!-- END SORTING TAB CONTENT -->
+
+            <!-- COUNTER TAB CONTENT -->
+            <div id="counter-tab-content" class="tab-content">
+                <section class="upload-section">
+                    <div class="upload-area" id="counterUploadArea">
+                        <div class="upload-icon">📊</div>
+                        <h2>Drop your PDF label files here</h2>
+                        <p>Upload labels from multiple platforms to count by courier and return address</p>
+                        <input type="file" id="counterFileInput" accept=".pdf" multiple>
+                    </div>
+                    <div class="button-group">
+                        <button class="btn btn-secondary" id="counterClearBtn" style="display: none;">
+                            🗑️ Clear Files
+                        </button>
+                        <button class="btn btn-primary" id="counterProcessBtn" disabled>
+                            🔢 Count Labels
+                        </button>
+                    </div>
+                </section>
+
+                <section class="counter-files-info" id="counterFilesInfo" style="display: none;">
+                    <h3>📁 Uploaded Files</h3>
+                    <div class="counter-files-list" id="counterFilesList"></div>
+                </section>
+
+                <section class="status-section" id="counterStatusSection" style="display: none;">
+                    <div class="status-card">
+                        <h3>Processing Status</h3>
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="counterProgressFill"></div>
+                        </div>
+                        <p id="counterStatusText">Initializing...</p>
+                    </div>
+                </section>
+
+                <section class="counter-results-section" id="counterResultsSection" style="display: none;">
+                    <div class="results-card">
+                        <h3>📊 Label Count Results</h3>
+                        
+                        <div class="counter-summary">
+                            <div class="stat-item">
+                                <span class="stat-value" id="counterTotalLabels">0</span>
+                                <span class="stat-label">Total Labels</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-value" id="counterTotalGroups">0</span>
+                                <span class="stat-label">Return Address Groups</span>
+                            </div>
+                        </div>
+
+                        <div class="counter-groups-container" id="counterGroupsContainer">
+                            <!-- Dynamic groups will be inserted here -->
+                            <!-- Example structure:
+                            <div class="counter-group">
+                                <div class="counter-group-header">
+                                    <h4>XIDXID</h4>
+                                    <span class="counter-group-total">TOTAL - 10</span>
+                                </div>
+                                <div class="counter-group-items">
+                                    <div class="counter-item">
+                                        <span class="courier-name">Delhivery</span>
+                                        <span class="courier-count">5</span>
+                                    </div>
+                                </div>
+                            </div>
+                            -->
+                        </div>
+
+                        <div class="counter-output-section">
+                            <h4>📋 Text Output</h4>
+                            <pre id="counterTextOutput" class="counter-text-output"></pre>
+                            <button class="btn btn-success" id="copyCounterResultsBtn">
+                                📋 Copy Results
+                            </button>
+                            <span class="copy-feedback" id="copyFeedback" style="display: none;">✅ Copied!</span>
+                        </div>
+                    </div>
+                </section>
+            </div>
+            <!-- END COUNTER TAB CONTENT -->
 
             <!-- Password Modal -->
             <div class="modal" id="passwordModal" style="display: none;">
@@ -137,10 +229,14 @@
                 <div class="modal-content modal-large">
                     <h3>✏️ Edit Priority Labels</h3>
                     <p>Enter one label per line. Labels will be prioritized in the order listed.</p>
+                    <div class="cloud-sync-info">
+                        <span class="cloud-icon">☁️</span>
+                        <span>Changes will be saved to the cloud and synced across all devices</span>
+                    </div>
                     <textarea id="labelsTextarea" rows="20"></textarea>
                     <div class="modal-buttons">
                         <button class="btn btn-secondary" id="cancelEditBtn">Cancel</button>
-                        <button class="btn btn-primary" id="saveLabelsBtn">Save Changes</button>
+                        <button class="btn btn-primary" id="saveLabelsBtn">💾 Save Labels</button>
                     </div>
                 </div>
             </div>

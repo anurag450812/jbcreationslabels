@@ -255,7 +255,7 @@ function findDaysForNeedInSheet_WebSafe() {
 
 /**
  * Handles POST requests from the JB Creations website
- * This function deducts stock counts based on processed labels
+ * This function handles stock deduction and priority labels management
  */
 function doPost(e) {
   try {
@@ -277,6 +277,10 @@ function doPost(e) {
     
     if (data.action === 'deductStock') {
       return handleDeductStock(data);
+    }
+    
+    if (data.action === 'savePriorityLabels') {
+      return handleSavePriorityLabels(data);
     }
     
     return ContentService.createTextOutput(JSON.stringify({
@@ -385,14 +389,187 @@ function handleDeductStock(data) {
 
 /**
  * Handles GET requests - useful for testing if the web app is working
+ * Also handles getPriorityLabels action
  */
 function doGet(e) {
+  var action = e.parameter ? e.parameter.action : null;
+  
+  // Handle getPriorityLabels action
+  if (action === 'getPriorityLabels') {
+    return handleGetPriorityLabels();
+  }
+  
   return ContentService.createTextOutput(JSON.stringify({
     status: 'ok',
     message: 'JB Creations Stock Update API is running',
     timestamp: new Date().toISOString(),
-    availableActions: ['deductStock']
+    availableActions: ['deductStock', 'savePriorityLabels', 'getPriorityLabels']
   })).setMimeType(ContentService.MimeType.JSON);
+}
+
+// ============================================
+// PRIORITY LABELS MANAGEMENT
+// Store priority labels in a dedicated sheet
+// ============================================
+
+var PRIORITY_LABELS_SHEET_NAME = 'PRIORITY_LABELS';
+
+/**
+ * Get or create the priority labels sheet
+ */
+function getPriorityLabelsSheet() {
+  var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = spreadsheet.getSheetByName(PRIORITY_LABELS_SHEET_NAME);
+  
+  if (!sheet) {
+    // Create the sheet if it doesn't exist
+    sheet = spreadsheet.insertSheet(PRIORITY_LABELS_SHEET_NAME);
+    
+    // Add header
+    sheet.getRange('A1').setValue('Priority Label SKU');
+    sheet.getRange('A1').setFontWeight('bold');
+    sheet.getRange('A1').setBackground('#4a90d9');
+    sheet.getRange('A1').setFontColor('white');
+    sheet.setColumnWidth(1, 200);
+    
+    Logger.log('Created new PRIORITY_LABELS sheet');
+  }
+  
+  return sheet;
+}
+
+/**
+ * Handle saving priority labels to Google Sheets
+ */
+function handleSavePriorityLabels(data) {
+  try {
+    var labels = data.labels;
+    
+    if (!labels || !Array.isArray(labels) || labels.length === 0) {
+      return ContentService.createTextOutput(JSON.stringify({
+        success: false,
+        message: 'No labels provided'
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    var sheet = getPriorityLabelsSheet();
+    
+    // Clear existing labels (except header)
+    var lastRow = sheet.getLastRow();
+    if (lastRow > 1) {
+      sheet.getRange(2, 1, lastRow - 1, 1).clear();
+    }
+    
+    // Write new labels starting from row 2
+    var labelData = labels.map(function(label) {
+      return [label];
+    });
+    
+    sheet.getRange(2, 1, labelData.length, 1).setValues(labelData);
+    
+    // Add timestamp in column B, row 1
+    sheet.getRange('B1').setValue('Last Updated');
+    sheet.getRange('B1').setFontWeight('bold');
+    sheet.getRange('B2').setValue(new Date().toISOString());
+    sheet.setColumnWidth(2, 180);
+    
+    Logger.log('Saved ' + labels.length + ' priority labels to sheet');
+    
+    return ContentService.createTextOutput(JSON.stringify({
+      success: true,
+      message: 'Priority labels saved successfully',
+      count: labels.length,
+      timestamp: new Date().toISOString()
+    })).setMimeType(ContentService.MimeType.JSON);
+    
+  } catch (error) {
+    Logger.log('Error saving priority labels: ' + error.toString());
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false,
+      message: 'Error saving labels: ' + error.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+/**
+ * Handle getting priority labels from Google Sheets
+ */
+function handleGetPriorityLabels() {
+  try {
+    var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = spreadsheet.getSheetByName(PRIORITY_LABELS_SHEET_NAME);
+    
+    if (!sheet) {
+      Logger.log('Priority labels sheet not found, returning empty array');
+      return ContentService.createTextOutput(JSON.stringify({
+        success: true,
+        labels: [],
+        message: 'Priority labels sheet not found'
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    var lastRow = sheet.getLastRow();
+    
+    if (lastRow <= 1) {
+      // Only header exists, no labels
+      return ContentService.createTextOutput(JSON.stringify({
+        success: true,
+        labels: [],
+        message: 'No priority labels found'
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    // Get labels from column A, starting from row 2
+    var range = sheet.getRange(2, 1, lastRow - 1, 1);
+    var values = range.getValues();
+    
+    // Flatten and filter empty values
+    var labels = values
+      .map(function(row) { return String(row[0]).trim(); })
+      .filter(function(label) { return label.length > 0; });
+    
+    // Get last updated timestamp if available
+    var lastUpdated = null;
+    try {
+      lastUpdated = sheet.getRange('B2').getValue();
+    } catch (e) {}
+    
+    Logger.log('Retrieved ' + labels.length + ' priority labels from sheet');
+    
+    return ContentService.createTextOutput(JSON.stringify({
+      success: true,
+      labels: labels,
+      count: labels.length,
+      lastUpdated: lastUpdated ? lastUpdated.toString() : null,
+      message: 'Priority labels retrieved successfully'
+    })).setMimeType(ContentService.MimeType.JSON);
+    
+  } catch (error) {
+    Logger.log('Error getting priority labels: ' + error.toString());
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false,
+      labels: [],
+      message: 'Error getting labels: ' + error.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+/**
+ * Test function for priority labels
+ */
+function testPriorityLabels() {
+  // Test saving
+  var testSaveData = {
+    action: 'savePriorityLabels',
+    labels: ['test-label-1', 'test-label-2', 'bd18', 'bd21']
+  };
+  
+  var saveResult = handleSavePriorityLabels(testSaveData);
+  Logger.log('Save Test Result: ' + saveResult.getContent());
+  
+  // Test getting
+  var getResult = handleGetPriorityLabels();
+  Logger.log('Get Test Result: ' + getResult.getContent());
 }
 
 /**

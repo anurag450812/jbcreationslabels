@@ -107,6 +107,35 @@ let labelOccurrences = {}; // Store label counts globally for use during downloa
 let pendingPasswordAction = null; // Track which action requires password ('editLabels' or 'googleSheets')
 let stockAlreadyDeducted = false; // Prevent duplicate stock deductions on multiple download clicks
 
+// Label Counter specific variables
+let counterUploadedFiles = [];
+
+// Tab switching function
+function switchTab(tabName) {
+    // Update tab buttons
+    const tabButtons = document.querySelectorAll('.tab-btn');
+    tabButtons.forEach(btn => {
+        if (btn.dataset.tab === tabName) {
+            btn.classList.add('active');
+        } else {
+            btn.classList.remove('active');
+        }
+    });
+
+    // Update tab content
+    const tabContents = document.querySelectorAll('.tab-content');
+    tabContents.forEach(content => {
+        if (content.id === `${tabName}-tab-content`) {
+            content.classList.add('active');
+        } else {
+            content.classList.remove('active');
+        }
+    });
+    
+    // Save active tab to localStorage
+    localStorage.setItem('activeTab', tabName);
+}
+
 // PDF.js worker setup
 pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
@@ -134,23 +163,129 @@ const labelsTextarea = document.getElementById('labelsTextarea');
 const saveLabelsBtn = document.getElementById('saveLabelsBtn');
 const cancelEditBtn = document.getElementById('cancelEditBtn');
 
+// Label Counter DOM Elements
+const counterUploadArea = document.getElementById('counterUploadArea');
+const counterFileInput = document.getElementById('counterFileInput');
+const counterProcessBtn = document.getElementById('counterProcessBtn');
+const counterClearBtn = document.getElementById('counterClearBtn');
+const counterFilesInfo = document.getElementById('counterFilesInfo');
+const counterFilesList = document.getElementById('counterFilesList');
+const counterStatusSection = document.getElementById('counterStatusSection');
+const counterProgressFill = document.getElementById('counterProgressFill');
+const counterStatusText = document.getElementById('counterStatusText');
+const counterResultsSection = document.getElementById('counterResultsSection');
+const counterTotalLabels = document.getElementById('counterTotalLabels');
+const counterTotalGroups = document.getElementById('counterTotalGroups');
+const counterGroupsContainer = document.getElementById('counterGroupsContainer');
+const counterTextOutput = document.getElementById('counterTextOutput');
+const copyCounterResultsBtn = document.getElementById('copyCounterResultsBtn');
+const copyFeedback = document.getElementById('copyFeedback');
+
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
     initializeApp();
 });
 
 function initializeApp() {
-    // Display priority list
+    // Display priority list (with default labels first)
     displayPriorityList();
     
     // Setup event listeners
     setupEventListeners();
+    
+    // Restore active tab from localStorage
+    const savedTab = localStorage.getItem('activeTab');
+    if (savedTab && (savedTab === 'sorting' || savedTab === 'counter')) {
+        switchTab(savedTab);
+    }
+    
+    // Load priority labels from cloud (async, will update UI when loaded)
+    loadPriorityLabelsFromCloud();
 }
 
 function displayPriorityList() {
     priorityList.innerHTML = PRIORITY_LABELS.map(label => 
         `<div class="priority-item">${label}</div>`
     ).join('');
+}
+
+// Load priority labels from Google Sheets
+async function loadPriorityLabelsFromCloud() {
+    if (!GOOGLE_SHEETS_CONFIG.webAppUrl) {
+        console.log('Google Sheets not configured, using default priority labels');
+        return;
+    }
+    
+    try {
+        // Add action parameter to URL for GET request
+        const url = `${GOOGLE_SHEETS_CONFIG.webAppUrl}?action=getPriorityLabels`;
+        
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: {
+                'Accept': 'application/json',
+            }
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            
+            if (data.success && data.labels && data.labels.length > 0) {
+                PRIORITY_LABELS = data.labels;
+                displayPriorityList();
+                console.log(`✅ Loaded ${PRIORITY_LABELS.length} priority labels from cloud`);
+                
+                // Show brief notification
+                showCloudSyncNotification('✅ Priority labels synced from cloud');
+            } else {
+                console.log('No priority labels found in cloud, using defaults');
+            }
+        }
+    } catch (error) {
+        console.error('Error loading priority labels from cloud:', error);
+        // Silently use default labels if load fails
+    }
+}
+
+// Show a brief notification for cloud sync status
+function showCloudSyncNotification(message) {
+    // Create notification element if it doesn't exist
+    let notification = document.getElementById('cloudSyncNotification');
+    if (!notification) {
+        notification = document.createElement('div');
+        notification.id = 'cloudSyncNotification';
+        notification.style.cssText = `
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: linear-gradient(135deg, #10b981, #059669);
+            color: white;
+            padding: 12px 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+            z-index: 10000;
+            font-size: 14px;
+            font-weight: 500;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.3s ease;
+        `;
+        document.body.appendChild(notification);
+    }
+    
+    notification.textContent = message;
+    
+    // Show notification
+    setTimeout(() => {
+        notification.style.transform = 'translateY(0)';
+        notification.style.opacity = '1';
+    }, 100);
+    
+    // Hide after 3 seconds
+    setTimeout(() => {
+        notification.style.transform = 'translateY(100px)';
+        notification.style.opacity = '0';
+    }, 3000);
 }
 
 function setupEventListeners() {
@@ -215,7 +350,619 @@ function setupEventListeners() {
             hideEditLabelsModal();
         }
     });
+
+    // ===============================
+    // LABEL COUNTER EVENT LISTENERS
+    // ===============================
+    
+    // Counter file input
+    counterFileInput.addEventListener('change', handleCounterFileSelect);
+    
+    // Counter drag and drop
+    counterUploadArea.addEventListener('click', () => counterFileInput.click());
+    
+    counterUploadArea.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        counterUploadArea.classList.add('dragover');
+    });
+    
+    counterUploadArea.addEventListener('dragleave', () => {
+        counterUploadArea.classList.remove('dragover');
+    });
+    
+    counterUploadArea.addEventListener('drop', (e) => {
+        e.preventDefault();
+        counterUploadArea.classList.remove('dragover');
+        const files = Array.from(e.dataTransfer.files).filter(f => f.type === 'application/pdf');
+        if (files.length > 0) {
+            handleCounterFiles(files);
+        }
+    });
+    
+    // Counter process button
+    counterProcessBtn.addEventListener('click', processCounterLabels);
+    
+    // Counter clear button
+    counterClearBtn.addEventListener('click', clearCounterFiles);
+    
+    // Copy results button
+    copyCounterResultsBtn.addEventListener('click', copyCounterResults);
 }
+
+// ===============================
+// LABEL COUNTER FUNCTIONS
+// ===============================
+
+function handleCounterFileSelect(e) {
+    const files = Array.from(e.target.files);
+    if (files.length > 0) {
+        handleCounterFiles(files);
+    }
+}
+
+function handleCounterFiles(files) {
+    // Merge with existing files instead of replacing
+    const existingFileNames = new Set(counterUploadedFiles.map(f => f.name));
+    const newFiles = files.filter(f => !existingFileNames.has(f.name));
+    
+    counterUploadedFiles = [...counterUploadedFiles, ...newFiles];
+    
+    if (counterUploadedFiles.length > 0) {
+        counterProcessBtn.disabled = false;
+        counterClearBtn.style.display = 'inline-flex';
+        
+        // Update upload area text
+        const uploadText = counterUploadArea.querySelector('h2');
+        const uploadSubtext = counterUploadArea.querySelector('p');
+        uploadText.textContent = `${counterUploadedFiles.length} file(s) ready`;
+        uploadSubtext.textContent = 'Drop more files or click to add more';
+        
+        // Show files info
+        displayCounterFilesInfo();
+    }
+}
+
+function displayCounterFilesInfo() {
+    counterFilesInfo.style.display = 'block';
+    counterFilesList.innerHTML = counterUploadedFiles.map(file => 
+        `<div class="counter-file-item">📄 ${file.name}</div>`
+    ).join('');
+}
+
+function clearCounterFiles() {
+    counterUploadedFiles = [];
+    counterFileInput.value = '';
+    counterProcessBtn.disabled = true;
+    counterClearBtn.style.display = 'none';
+    counterFilesInfo.style.display = 'none';
+    counterResultsSection.style.display = 'none';
+    counterStatusSection.style.display = 'none';
+    
+    // Revoke skipped pages PDF URL
+    if (skippedPagesPdfUrl) {
+        URL.revokeObjectURL(skippedPagesPdfUrl);
+        skippedPagesPdfUrl = null;
+    }
+    
+    // Reset upload area text
+    const uploadText = counterUploadArea.querySelector('h2');
+    const uploadSubtext = counterUploadArea.querySelector('p');
+    uploadText.textContent = 'Drop your PDF label files here';
+    uploadSubtext.textContent = 'Upload labels from multiple platforms to count by courier and return address';
+}
+
+async function processCounterLabels() {
+    if (counterUploadedFiles.length === 0) return;
+    
+    counterStatusSection.style.display = 'block';
+    counterResultsSection.style.display = 'none';
+    counterProgressFill.style.width = '0%';
+    counterStatusText.textContent = 'Starting processing...';
+    
+    try {
+        const allLabelsData = [];
+        const skippedPages = []; // Track pages that don't match any criteria
+        let totalPages = 0;
+        
+        for (let fileIdx = 0; fileIdx < counterUploadedFiles.length; fileIdx++) {
+            const file = counterUploadedFiles[fileIdx];
+            counterStatusText.textContent = `Processing file ${fileIdx + 1} of ${counterUploadedFiles.length}: ${file.name}`;
+            
+            const arrayBuffer = await file.arrayBuffer();
+            const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
+            
+            for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+                const page = await pdf.getPage(pageNum);
+                const textContent = await page.getTextContent();
+                const text = textContent.items.map(item => item.str).join(' ');
+                
+                // Extract label info from this page
+                const labelInfo = extractLabelInfo(text, file.name, pageNum);
+                if (labelInfo) {
+                    allLabelsData.push(labelInfo);
+                } else {
+                    // Page didn't match any criteria - track it with reason
+                    const reason = determineSkipReason(text);
+                    skippedPages.push({
+                        fileName: file.name,
+                        pageNum: pageNum,
+                        fileIndex: fileIdx,
+                        reason: reason
+                    });
+                }
+                
+                totalPages++;
+                const progress = ((fileIdx * 100 / counterUploadedFiles.length) + 
+                    (pageNum / pdf.numPages * 100 / counterUploadedFiles.length));
+                counterProgressFill.style.width = `${progress}%`;
+            }
+        }
+        
+        counterStatusText.textContent = 'Counting labels...';
+        counterProgressFill.style.width = '100%';
+        
+        // Group and count labels
+        const groupedResults = countLabelsByGroup(allLabelsData);
+        
+        // Display results
+        displayCounterResults(groupedResults, totalPages, skippedPages);
+        
+        counterStatusSection.style.display = 'none';
+        counterResultsSection.style.display = 'block';
+        
+    } catch (error) {
+        console.error('Error processing labels:', error);
+        counterStatusText.textContent = `Error: ${error.message}`;
+        counterProgressFill.style.backgroundColor = '#ef4444';
+    }
+}
+
+function extractLabelInfo(text, fileName, pageNum) {
+    const textUpper = text.toUpperCase();
+    
+    // ========================================
+    // CHECK FOR MEESHO LABELS
+    // Pattern: "If undelivered, return to: XXXXX" + courier with PICKUP
+    // ========================================
+    const returnAddressPattern = /if\s+undelivered,?\s+return\s+to:?\s*([A-Za-z0-9_-]+)/i;
+    const returnMatch = text.match(returnAddressPattern);
+    
+    if (returnMatch && returnMatch[1]) {
+        // This is a Meesho label - check for courier with PICKUP
+        const couriers = ['DELHIVERY', 'SHADOWFAX', 'VALMO', 'XPRESS BEES'];
+        let detectedCourier = null;
+        
+        for (const courier of couriers) {
+            if (textUpper.includes(courier) && textUpper.includes('PICKUP')) {
+                detectedCourier = courier;
+                break;
+            }
+        }
+        
+        if (detectedCourier) {
+            return {
+                platform: 'MEESHO',
+                subGroup: returnMatch[1].toUpperCase(), // G-XID, XIDXID, etc.
+                courier: detectedCourier
+            };
+        }
+    }
+    
+    // ========================================
+    // CHECK FOR FLIPKART LABELS
+    // Pattern: "Shipping/Customer address:" + "Sold By: XXXXX"
+    // ========================================
+    if (text.includes('Shipping/Customer address:') || textUpper.includes('SHIPPING/CUSTOMER ADDRESS:')) {
+        // This is a Flipkart label - look for Sold By
+        const soldByPattern = /Sold\s+By:?\s*([A-Za-z0-9\s_-]+?)(?:\s*,|\s*\n|\s*$|\s+[A-Z])/i;
+        const soldByMatch = text.match(soldByPattern);
+        
+        if (soldByMatch && soldByMatch[1]) {
+            const sellerName = soldByMatch[1].trim();
+            return {
+                platform: 'FLIPKART',
+                subGroup: sellerName.toUpperCase(),
+                seller: sellerName
+            };
+        } else {
+            // Flipkart label but no seller found
+            return {
+                platform: 'FLIPKART',
+                subGroup: 'UNKNOWN SELLER',
+                seller: 'Unknown'
+            };
+        }
+    }
+    
+    // No match found
+    return null;
+}
+
+function determineSkipReason(text) {
+    const textUpper = text.toUpperCase();
+    
+    // Check what patterns were found
+    const hasReturnAddress = /if\s+undelivered,?\s+return\s+to:/i.test(text);
+    const hasShippingAddress = text.includes('Shipping/Customer address:') || textUpper.includes('SHIPPING/CUSTOMER ADDRESS:');
+    const hasCourier = textUpper.includes('DELHIVERY') || textUpper.includes('SHADOWFAX') || 
+                       textUpper.includes('VALMO') || textUpper.includes('XPRESS BEES');
+    const hasPickup = textUpper.includes('PICKUP');
+    const hasSoldBy = /Sold\s+By:/i.test(text);
+    
+    // Determine most likely reason
+    if (hasReturnAddress && hasCourier && !hasPickup) {
+        return 'Meesho return address found, but missing "PICKUP" with courier';
+    } else if (hasReturnAddress && !hasCourier) {
+        return 'Meesho return address found, but no valid courier detected';
+    } else if (hasShippingAddress && !hasSoldBy) {
+        return 'Flipkart shipping address found, but missing "Sold By" field';
+    } else if (hasCourier && !hasReturnAddress && !hasShippingAddress) {
+        return 'Courier found but missing platform identifiers';
+    } else if (text.trim().length < 50) {
+        return 'Page content too short or mostly blank';
+    } else {
+        return 'No Meesho or Flipkart identifiers found';
+    }
+}
+
+function countLabelsByGroup(labelsData) {
+    const results = {
+        MEESHO: {
+            total: 0,
+            subGroups: {} // e.g., { 'XIDXID': { total: 5, couriers: { 'DELHIVERY': 3, 'SHADOWFAX': 2 } } }
+        },
+        FLIPKART: {
+            total: 0,
+            sellers: {} // e.g., { 'JB CREATIONS': 3, 'XIDLZZ': 2 }
+        }
+    };
+    
+    for (const label of labelsData) {
+        if (label.platform === 'MEESHO') {
+            results.MEESHO.total++;
+            
+            const subGroup = label.subGroup;
+            if (!results.MEESHO.subGroups[subGroup]) {
+                results.MEESHO.subGroups[subGroup] = {
+                    total: 0,
+                    couriers: {}
+                };
+            }
+            results.MEESHO.subGroups[subGroup].total++;
+            
+            const courier = label.courier;
+            if (!results.MEESHO.subGroups[subGroup].couriers[courier]) {
+                results.MEESHO.subGroups[subGroup].couriers[courier] = 0;
+            }
+            results.MEESHO.subGroups[subGroup].couriers[courier]++;
+            
+        } else if (label.platform === 'FLIPKART') {
+            results.FLIPKART.total++;
+            
+            const seller = label.subGroup;
+            if (!results.FLIPKART.sellers[seller]) {
+                results.FLIPKART.sellers[seller] = 0;
+            }
+            results.FLIPKART.sellers[seller]++;
+        }
+    }
+    
+    return results;
+}
+
+function displayCounterResults(groupedResults, totalPages, skippedPages) {
+    const meeshoTotal = groupedResults.MEESHO.total;
+    const flipkartTotal = groupedResults.FLIPKART.total;
+    const grandTotal = meeshoTotal + flipkartTotal;
+    
+    counterTotalLabels.textContent = grandTotal;
+    
+    // Count unique sub-groups
+    const meeshoSubGroups = Object.keys(groupedResults.MEESHO.subGroups).length;
+    const flipkartSellers = Object.keys(groupedResults.FLIPKART.sellers).length;
+    counterTotalGroups.textContent = meeshoSubGroups + flipkartSellers;
+    
+    // Generate HTML and text output
+    let groupsHTML = '';
+    let textOutput = '';
+    
+    // ========================================
+    // MEESHO SECTION
+    // ========================================
+    if (meeshoTotal > 0) {
+        groupsHTML += `
+            <div class="counter-platform-section">
+                <div class="platform-header meesho-header">
+                    <h3>🛒 MEESHO</h3>
+                    <span class="platform-total">Total: ${meeshoTotal}</span>
+                </div>
+        `;
+        textOutput += `=== MEESHO ===\n`;
+        textOutput += `MEESHO TOTAL - ${meeshoTotal}\n\n`;
+        
+        // Sort sub-groups: XIDXID and G-XID first, then alphabetically
+        const sortedSubGroups = Object.keys(groupedResults.MEESHO.subGroups).sort((a, b) => {
+            if (a === 'XIDXID') return -1;
+            if (b === 'XIDXID') return 1;
+            if (a === 'G-XID' || a === 'G_XID') return -1;
+            if (b === 'G-XID' || b === 'G_XID') return 1;
+            return a.localeCompare(b);
+        });
+        
+        for (const subGroupName of sortedSubGroups) {
+            const subGroup = groupedResults.MEESHO.subGroups[subGroupName];
+            
+            groupsHTML += `
+                <div class="counter-group">
+                    <div class="counter-group-header">
+                        <h4>${subGroupName}</h4>
+                        <span class="counter-group-total">TOTAL - ${subGroup.total}</span>
+                    </div>
+                    <div class="counter-group-items">
+            `;
+            
+            textOutput += `${subGroupName} TOTAL - ${subGroup.total}\n`;
+            
+            // Sort couriers alphabetically
+            const sortedCouriers = Object.keys(subGroup.couriers).sort();
+            
+            for (const courier of sortedCouriers) {
+                const count = subGroup.couriers[courier];
+                groupsHTML += `
+                    <div class="counter-item">
+                        <span class="courier-name">${courier}</span>
+                        <span class="courier-count">${count}</span>
+                    </div>
+                `;
+                textOutput += `  ${courier} - ${count}\n`;
+            }
+            
+            groupsHTML += `
+                    </div>
+                </div>
+            `;
+            textOutput += '\n';
+        }
+        
+        groupsHTML += `</div>`;
+    }
+    
+    // ========================================
+    // FLIPKART SECTION
+    // ========================================
+    if (flipkartTotal > 0) {
+        groupsHTML += `
+            <div class="counter-platform-section">
+                <div class="platform-header flipkart-header">
+                    <h3>🛍️ FLIPKART</h3>
+                    <span class="platform-total">Total: ${flipkartTotal}</span>
+                </div>
+                <div class="counter-group">
+                    <div class="counter-group-header flipkart-group-header">
+                        <h4>Sellers</h4>
+                        <span class="counter-group-total">TOTAL - ${flipkartTotal}</span>
+                    </div>
+                    <div class="counter-group-items">
+        `;
+        
+        textOutput += `=== FLIPKART ===\n`;
+        textOutput += `FLIPKART TOTAL - ${flipkartTotal}\n\n`;
+        
+        // Sort sellers alphabetically, but put JB CREATIONS first
+        const sortedSellers = Object.keys(groupedResults.FLIPKART.sellers).sort((a, b) => {
+            if (a.includes('JB CREATIONS') || a.includes('JB CREATION')) return -1;
+            if (b.includes('JB CREATIONS') || b.includes('JB CREATION')) return 1;
+            return a.localeCompare(b);
+        });
+        
+        for (const seller of sortedSellers) {
+            const count = groupedResults.FLIPKART.sellers[seller];
+            groupsHTML += `
+                <div class="counter-item">
+                    <span class="seller-name">${seller}</span>
+                    <span class="courier-count">${count}</span>
+                </div>
+            `;
+            textOutput += `${seller} - ${count}\n`;
+        }
+        
+        groupsHTML += `
+                    </div>
+                </div>
+            </div>
+        `;
+        textOutput += '\n';
+    }
+    
+    // ========================================
+    // GRAND TOTAL
+    // ========================================
+    textOutput += `==============================\n`;
+    textOutput += `TODAYS TOTAL - ${grandTotal}\n`;
+    textOutput += `==============================\n`;
+    
+    // ========================================
+    // SKIPPED PAGES / ERRORS
+    // ========================================
+    if (skippedPages.length > 0) {
+        groupsHTML += `
+            <div class="counter-errors-section">
+                <div class="errors-header">
+                    <div>
+                        <h4>⚠️ Skipped Pages (${skippedPages.length})</h4>
+                        <p>These pages did not match Meesho or Flipkart criteria</p>
+                    </div>
+                    <button class="btn btn-view-all-skipped" id="viewAllSkippedBtn" disabled>
+                        📄 Creating PDF...
+                    </button>
+                </div>
+                <div class="errors-list">
+        `;
+        
+        textOutput += `\n⚠️ SKIPPED PAGES (${skippedPages.length}):\n`;
+        
+        for (const skipped of skippedPages) {
+            groupsHTML += `
+                <div class="error-item">
+                    <span class="error-file">📄 ${skipped.fileName}</span>
+                    <span class="error-page">Page ${skipped.pageNum}</span>
+                    <span class="error-reason">${skipped.reason || 'Unknown criteria'}</span>
+                </div>
+            `;
+            textOutput += `  - ${skipped.fileName}, Page ${skipped.pageNum} (${skipped.reason || 'Unknown'})\n`;
+        }
+        
+        groupsHTML += `
+                </div>
+            </div>
+        `;
+    }
+    
+    counterGroupsContainer.innerHTML = groupsHTML;
+    counterTextOutput.textContent = textOutput.trim();
+    
+    // Create PDF after DOM is rendered
+    if (skippedPages.length > 0) {
+        setTimeout(() => createSkippedPagesPDF(skippedPages), 100);
+    }
+}
+
+// Global variable to store skipped pages PDF URL
+let skippedPagesPdfUrl = null;
+
+// Function to create a merged PDF of all skipped pages with reasons
+async function createSkippedPagesPDF(skippedPages) {
+    const viewBtn = document.getElementById('viewAllSkippedBtn');
+    
+    if (!viewBtn) {
+        console.error('View button not found');
+        return;
+    }
+    
+    try {
+        viewBtn.textContent = '📄 Creating PDF...';
+        viewBtn.disabled = true;
+        
+        // Create a new PDF document
+        const mergedPdfDoc = await PDFLib.PDFDocument.create();
+        
+        // Embed a font for adding text
+        const helveticaFont = await mergedPdfDoc.embedFont(PDFLib.StandardFonts.Helvetica);
+        const helveticaBold = await mergedPdfDoc.embedFont(PDFLib.StandardFonts.HelveticaBold);
+        
+        for (let i = 0; i < skippedPages.length; i++) {
+            const skipped = skippedPages[i];
+            const file = counterUploadedFiles[skipped.fileIndex];
+            
+            if (!file) continue;
+            
+            // Update button with progress
+            viewBtn.textContent = `📄 Processing ${i + 1}/${skippedPages.length}...`;
+            
+            // Load the source PDF
+            const arrayBuffer = await file.arrayBuffer();
+            const sourcePdf = await PDFLib.PDFDocument.load(arrayBuffer);
+            
+            // Copy the specific page (pages are 0-indexed in pdf-lib)
+            const [copiedPage] = await mergedPdfDoc.copyPages(sourcePdf, [skipped.pageNum - 1]);
+            const addedPage = mergedPdfDoc.addPage(copiedPage);
+            
+            // Get page dimensions
+            const { width, height } = addedPage.getSize();
+            
+            // Add a red banner at the top with the reason
+            const bannerHeight = 60;
+            const padding = 10;
+            
+            // Draw red background banner
+            addedPage.drawRectangle({
+                x: 0,
+                y: height - bannerHeight,
+                width: width,
+                height: bannerHeight,
+                color: PDFLib.rgb(0.937, 0.267, 0.267), // #ef4444
+            });
+            
+            // Draw white text - Title (no emoji - WinAnsi encoding limitation)
+            addedPage.drawText('! SKIPPED PAGE !', {
+                x: padding,
+                y: height - bannerHeight + 35,
+                size: 14,
+                font: helveticaBold,
+                color: PDFLib.rgb(1, 1, 1),
+            });
+            
+            // Draw reason text (ensure no special characters)
+            const reasonText = `Reason: ${(skipped.reason || 'No Meesho/Flipkart criteria matched').replace(/[^\x00-\x7F]/g, '')}`;
+            addedPage.drawText(reasonText, {
+                x: padding,
+                y: height - bannerHeight + 15,
+                size: 10,
+                font: helveticaFont,
+                color: PDFLib.rgb(1, 1, 1),
+            });
+            
+            // Draw file info
+            const fileInfo = `File: ${skipped.fileName} | Page: ${skipped.pageNum}`;
+            const fileInfoWidth = helveticaFont.widthOfTextAtSize(fileInfo, 8);
+            addedPage.drawText(fileInfo, {
+                x: width - fileInfoWidth - padding,
+                y: height - bannerHeight + 25,
+                size: 8,
+                font: helveticaFont,
+                color: PDFLib.rgb(1, 1, 1),
+            });
+            
+            // Allow UI to update
+            await new Promise(resolve => setTimeout(resolve, 0));
+        }
+        
+        // Save the merged PDF
+        viewBtn.textContent = '💾 Saving PDF...';
+        const mergedPdfBytes = await mergedPdfDoc.save();
+        const blob = new Blob([mergedPdfBytes], { type: 'application/pdf' });
+        
+        // Revoke old URL if exists
+        if (skippedPagesPdfUrl) {
+            URL.revokeObjectURL(skippedPagesPdfUrl);
+        }
+        
+        // Create new URL
+        skippedPagesPdfUrl = URL.createObjectURL(blob);
+        
+        // Update button to view the PDF
+        viewBtn.textContent = `👁️ View All ${skippedPages.length} Skipped Pages`;
+        viewBtn.disabled = false;
+        viewBtn.onclick = () => {
+            window.open(skippedPagesPdfUrl, '_blank');
+        };
+        
+    } catch (error) {
+        console.error('Error creating skipped pages PDF:', error);
+        if (viewBtn) {
+            viewBtn.textContent = '❌ Error creating PDF';
+            viewBtn.disabled = true;
+        }
+        alert('Error creating skipped pages PDF: ' + error.message);
+    }
+}
+
+function copyCounterResults() {
+    const text = counterTextOutput.textContent;
+    navigator.clipboard.writeText(text).then(() => {
+        copyFeedback.style.display = 'inline';
+        setTimeout(() => {
+            copyFeedback.style.display = 'none';
+        }, 2000);
+    }).catch(err => {
+        console.error('Failed to copy:', err);
+        alert('Failed to copy results. Please select and copy manually.');
+    });
+}
+
+// ===============================
+// ORIGINAL LABEL SORTING FUNCTIONS
+// ===============================
 
 function clearFiles() {
     uploadedFiles = [];
@@ -751,7 +1498,7 @@ function hideEditLabelsModal() {
     editLabelsModal.style.display = 'none';
 }
 
-function saveLabels() {
+async function saveLabels() {
     const newLabels = labelsTextarea.value
         .split('\n')
         .map(label => label.trim())
@@ -762,12 +1509,50 @@ function saveLabels() {
         return;
     }
     
-    PRIORITY_LABELS = newLabels;
-    displayPriorityList();
-    hideEditLabelsModal();
+    // Check if Google Sheets is configured
+    if (!GOOGLE_SHEETS_CONFIG.webAppUrl) {
+        alert('⚠️ Google Sheets is not configured!\n\nPlease configure Google Sheets integration first to save priority labels globally.');
+        return;
+    }
     
-    // Show success message
-    alert(`✅ Priority labels updated successfully!\n\nTotal labels: ${PRIORITY_LABELS.length}`);
+    // Show saving indicator
+    saveLabelsBtn.disabled = true;
+    saveLabelsBtn.textContent = '⏳ Saving...';
+    
+    try {
+        // Save to Google Sheets
+        const response = await fetch(GOOGLE_SHEETS_CONFIG.webAppUrl, {
+            method: 'POST',
+            mode: 'no-cors',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                action: 'savePriorityLabels',
+                labels: newLabels
+            })
+        });
+        
+        // Update local state
+        PRIORITY_LABELS = newLabels;
+        displayPriorityList();
+        hideEditLabelsModal();
+        
+        // Show success message
+        alert(`✅ Priority labels saved globally!\n\nTotal labels: ${PRIORITY_LABELS.length}\n\nAll users will now see these updated labels.`);
+        
+    } catch (error) {
+        console.error('Error saving labels to Google Sheets:', error);
+        alert(`❌ Error saving labels: ${error.message}\n\nLabels were updated locally but may not persist.`);
+        
+        // Still update locally even if save fails
+        PRIORITY_LABELS = newLabels;
+        displayPriorityList();
+        hideEditLabelsModal();
+    } finally {
+        saveLabelsBtn.disabled = false;
+        saveLabelsBtn.textContent = '💾 Save Labels';
+    }
 }
 
 // Cropping functions for different platforms (to be implemented)
