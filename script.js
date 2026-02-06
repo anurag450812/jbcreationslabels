@@ -103,8 +103,8 @@ const DEFAULT_LABEL_CRITERIA = {
     },
     flipkart: {
         shippingAddressKeyword: 'Shipping/Customer address:',
-        soldByPattern: /Sold\s+By:?\s*([A-Za-z0-9\s_-]+?)(?:\s*,|\s*\n|\s*$|\s+[A-Z])/i,
-        soldByPatternString: "Sold\\s+By:?\\s*([A-Za-z0-9\\s_-]+?)(?:\\s*,|\\s*\\n|\\s*$|\\s+[A-Z])",
+        soldByPattern: /Sold\s*By\s*:?\s*([A-Za-z][A-Za-z0-9\s._&'()\/-]+?)\s*(?:,|\n|$)/i,
+        soldByPatternString: "Sold\\s*By\\s*:?\\s*([A-Za-z][A-Za-z0-9\\s._&'()\\/-]+?)\\s*(?:,|\\n|$)",
         soldByFlags: "i"
     }
 };
@@ -117,6 +117,17 @@ function loadLabelCriteria() {
     if (stored) {
         try {
             const parsed = JSON.parse(stored);
+            
+            // Auto-upgrade old/buggy Flipkart patterns to the current simplified version
+            const CURRENT_PATTERN = DEFAULT_LABEL_CRITERIA.flipkart.soldByPatternString;
+            if (parsed.flipkart && parsed.flipkart.soldByPatternString && 
+                parsed.flipkart.soldByPatternString !== CURRENT_PATTERN) {
+                console.log('Upgrading old Flipkart seller detection pattern to simplified version');
+                parsed.flipkart.soldByPatternString = CURRENT_PATTERN;
+                parsed.flipkart.soldByFlags = DEFAULT_LABEL_CRITERIA.flipkart.soldByFlags;
+                localStorage.setItem('labelDetectionCriteria', JSON.stringify(parsed));
+            }
+            
             // Reconstruct regex patterns from strings
             if (parsed.meesho && parsed.meesho.returnAddressPatternString) {
                 parsed.meesho.returnAddressPattern = new RegExp(
@@ -614,15 +625,21 @@ async function processCounterLabels() {
             for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
                 const page = await pdf.getPage(pageNum);
                 const textContent = await page.getTextContent();
-                const text = textContent.items.map(item => item.str).join(' ');
                 
-                // Extract label info from this page
-                const labelInfo = extractLabelInfo(text, file.name, pageNum);
+                // Extract text with rotation support (handles 90°, 180°, 270° rotated labels)
+                const textVariants = extractTextWithRotationSupport(textContent);
+                
+                // Try matching label info against all rotation variants
+                // Pass raw items for item-level fallback detection (handles rotated labels)
+                const rawItems = textContent.items;
+                const labelInfo = extractLabelInfoMulti(textVariants, file.name, pageNum, rawItems);
                 if (labelInfo) {
                     allLabelsData.push(labelInfo);
                 } else {
                     // Page didn't match any criteria - track it with reason
-                    const reason = determineSkipReason(text);
+                    // Use combined text from all variants for skip reason analysis
+                    const combinedText = textVariants.join(' ');
+                    const reason = determineSkipReason(combinedText);
                     skippedPages.push({
                         fileName: file.name,
                         pageNum: pageNum,
@@ -655,6 +672,399 @@ async function processCounterLabels() {
         counterStatusText.textContent = `Error: ${error.message}`;
         counterProgressFill.style.backgroundColor = '#ef4444';
     }
+}
+
+/**
+ * Extract text from PDF page with rotation support.
+ * Groups text items by rotation angle (0°, 90°, 180°, 270°),
+ * sorts each group into proper reading order, and returns
+ * an array of text variants to try for pattern matching.
+ */
+function extractTextWithRotationSupport(textContent) {
+    const items = textContent.items;
+    if (!items || items.length === 0) return [''];
+    
+    // Default text (simple join - works for normal non-rotated content)
+    const defaultText = items.map(item => item.str).join(' ');
+    
+    // Collect items with position and rotation info
+    const textItems = [];
+    for (const item of items) {
+        if (!item.str || !item.str.trim()) continue;
+        
+        let angle = 0;
+        let x = 0, y = 0;
+        
+        if (item.transform && item.transform.length >= 6) {
+            const [a, b, c, d, e, f] = item.transform;
+            x = e;
+            y = f;
+            // Calculate rotation from transform matrix
+            angle = Math.round(Math.atan2(b, a) * 180 / Math.PI);
+            angle = ((angle % 360) + 360) % 360;
+            // Snap to nearest 90°
+            angle = Math.round(angle / 90) * 90 % 360;
+        }
+        
+        textItems.push({ str: item.str, x, y, angle });
+    }
+    
+    // Get unique rotation angles actually present in items
+    const detectedAngles = [...new Set(textItems.map(item => item.angle))];
+    
+    // If all items are at 0° (normal), just return the default text
+    if (detectedAngles.length === 1 && detectedAngles[0] === 0) return [defaultText];
+    
+    const texts = [defaultText];
+    const LINE_THRESHOLD = 8; // pixels threshold for "same line" grouping
+    
+    // Build properly-ordered text for each detected rotation group
+    for (const targetAngle of detectedAngles) {
+        const groupItems = textItems.filter(item => item.angle === targetAngle);
+        if (groupItems.length === 0) continue;
+        
+        const sorted = sortItemsByReadingOrder(groupItems, targetAngle, LINE_THRESHOLD);
+        const text = sorted.map(item => item.str).join(' ');
+        if (text.trim() && text !== defaultText) {
+            texts.push(text);
+        }
+    }
+    
+    // For 90° rotated content with two spatial columns (common in Meesho labels),
+    // try splitting items into left/right columns by Y-coordinate and joining each separately
+    if (detectedAngles.includes(90) || detectedAngles.includes(270)) {
+        const rotAngle = detectedAngles.includes(90) ? 90 : 270;
+        const groupItems = textItems.filter(item => item.angle === rotAngle);
+        if (groupItems.length > 4) {
+            // Find the median Y to split left/right columns
+            const yValues = groupItems.map(item => item.y).sort((a, b) => a - b);
+            const medianY = yValues[Math.floor(yValues.length / 2)];
+            const yGap = (yValues[yValues.length - 1] - yValues[0]);
+            
+            // Only split if there's a clear gap (columns are far apart)
+            if (yGap > 200) {
+                const leftCol = groupItems.filter(item => item.y < medianY);
+                const rightCol = groupItems.filter(item => item.y >= medianY);
+                
+                if (leftCol.length > 0 && rightCol.length > 0) {
+                    const leftSorted = sortItemsByReadingOrder(leftCol, rotAngle, LINE_THRESHOLD);
+                    const rightSorted = sortItemsByReadingOrder(rightCol, rotAngle, LINE_THRESHOLD);
+                    
+                    // Left column first, then right column
+                    const colText = [...leftSorted, ...rightSorted].map(item => item.str).join(' ');
+                    if (colText.trim() && colText !== defaultText && !texts.includes(colText)) {
+                        texts.push(colText);
+                    }
+                }
+            }
+        }
+    }
+    
+    // Also try re-sorting ALL items assuming the entire page is at each rotation
+    // This handles cases where the page rotation isn't in the transform but in layout
+    for (const assumedAngle of [90, 180, 270]) {
+        if (detectedAngles.length === 1 && detectedAngles[0] === assumedAngle) continue;
+        
+        const sorted = sortItemsByReadingOrder([...textItems], assumedAngle, LINE_THRESHOLD);
+        const text = sorted.map(item => item.str).join(' ');
+        if (text.trim() && text !== defaultText && !texts.includes(text)) {
+            texts.push(text);
+        }
+    }
+    
+    return texts;
+}
+
+/**
+ * Sort text items into reading order based on rotation angle.
+ */
+function sortItemsByReadingOrder(items, angle, lineThreshold) {
+    return [...items].sort((a, b) => {
+        switch (angle) {
+            case 0: // Normal: top-to-bottom (high Y first), left-to-right
+                if (Math.abs(a.y - b.y) < lineThreshold) return a.x - b.x;
+                return b.y - a.y;
+            case 90: // 90° CW: left-to-right (low X first), bottom-to-top
+                if (Math.abs(a.x - b.x) < lineThreshold) return a.y - b.y;
+                return a.x - b.x;
+            case 180: // Upside down: bottom-to-top (low Y first), right-to-left
+                if (Math.abs(a.y - b.y) < lineThreshold) return b.x - a.x;
+                return a.y - b.y;
+            case 270: // 270° CW (90° CCW): right-to-left (high X first), top-to-bottom
+                if (Math.abs(a.x - b.x) < lineThreshold) return b.y - a.y;
+                return b.x - a.x;
+            default:
+                return 0;
+        }
+    });
+}
+
+/**
+ * Try extracting label info from multiple text variants (rotation support).
+ * Falls back to item-level detection if joined text matching fails.
+ */
+function extractLabelInfoMulti(textVariants, fileName, pageNum, rawItems) {
+    // Try each text variant (simple join, rotation-sorted, etc.)
+    let bestResult = null;
+    for (const text of textVariants) {
+        const result = extractLabelInfo(text, fileName, pageNum);
+        if (result) {
+            // If we got a complete result (seller identified), return immediately
+            if (result.subGroup !== 'UNKNOWN SELLER') return result;
+            // Otherwise save it as fallback but keep trying
+            if (!bestResult) bestResult = result;
+        }
+    }
+    // Fallback: item-level detection (works regardless of text ordering)
+    if (rawItems && rawItems.length > 0) {
+        const result = extractLabelInfoFromItems(rawItems, fileName, pageNum);
+        if (result) return result;
+    }
+    // Return the UNKNOWN SELLER result if nothing better found
+    return bestResult;
+}
+
+/**
+ * Try detecting platform from multiple text variants (rotation support).
+ * Falls back to item-level detection if joined text matching fails.
+ */
+function detectPlatformFromTextMulti(textVariants, rawItems) {
+    let bestResult = null;
+    for (const text of textVariants) {
+        const result = detectPlatformFromText(text);
+        if (result.platform !== 'unknown') {
+            // If seller is identified, return immediately
+            if (result.subGroup !== 'UNKNOWN SELLER') return result;
+            // Otherwise save as fallback
+            if (!bestResult) bestResult = result;
+        }
+    }
+    // Fallback: item-level detection
+    if (rawItems && rawItems.length > 0) {
+        const result = detectPlatformFromItems(rawItems);
+        if (result.platform !== 'unknown') return result;
+    }
+    // Return best result found so far, or try combined text
+    if (bestResult) return bestResult;
+    const combined = textVariants.join(' ');
+    return detectPlatformFromText(combined);
+}
+
+/**
+ * Item-level Meesho/Flipkart detection.
+ * Scans individual text items for platform patterns regardless of ordering.
+ * This handles 90°/180°/270° rotated labels where joined text may be garbled.
+ */
+function extractLabelInfoFromItems(rawItems, fileName, pageNum) {
+    // Collect all item strings (trimmed, non-empty)
+    const itemStrings = rawItems
+        .filter(item => item.str && item.str.trim())
+        .map(item => item.str.trim());
+    const allTextUpper = itemStrings.join(' ').toUpperCase();
+    
+    // ========================================
+    // MEESHO: Look for "return to:" in individual items,
+    // then find the seller ID in the NEXT item
+    // ========================================
+    let meeshoReturnAddress = null;
+    
+    for (let i = 0; i < itemStrings.length; i++) {
+        const s = itemStrings[i];
+        // Check if this item ends with "return to:" pattern
+        const retMatch = s.match(/(?:return\s+to|undelivered.*return.*to):?\s*$/i);
+        if (retMatch) {
+            // Seller ID is likely the NEXT non-empty item
+            // Skip single-char items (e.g., "P" from split destination codes like "DP")
+            for (let j = i + 1; j < Math.min(i + 5, itemStrings.length); j++) {
+                const candidate = itemStrings[j].trim();
+                if (candidate && candidate.length >= 2 && /^[A-Za-z][A-Za-z0-9_-]*$/.test(candidate)) {
+                    meeshoReturnAddress = candidate;
+                    break;
+                }
+            }
+            if (meeshoReturnAddress) break;
+        }
+        // Also check if item CONTAINS the full pattern "return to: XXXX"
+        const fullMatch = s.match(/return\s+to:?\s+([A-Za-z][A-Za-z0-9_-]+)/i);
+        if (fullMatch) {
+            meeshoReturnAddress = fullMatch[1];
+            break;
+        }
+        // Check for "If undelivered, return to: XXXX" across items
+        const partialMatch = s.match(/if\s+undelivered.*return\s+to:?\s*([A-Za-z][A-Za-z0-9_-]+)/i);
+        if (partialMatch && partialMatch[1]) {
+            meeshoReturnAddress = partialMatch[1];
+            break;
+        }
+    }
+    
+    if (meeshoReturnAddress) {
+        // Check for courier + PICKUP across ALL items
+        const couriers = LABEL_CRITERIA.meesho.couriers || ['DELHIVERY', 'SHADOWFAX', 'VALMO', 'XPRESS BEES'];
+        const pickupKeyword = (LABEL_CRITERIA.meesho.pickupKeyword || 'PICKUP').toUpperCase();
+        let detectedCourier = null;
+        
+        const hasPickup = allTextUpper.includes(pickupKeyword);
+        if (hasPickup) {
+            for (const courier of couriers) {
+                if (allTextUpper.includes(courier.toUpperCase())) {
+                    detectedCourier = courier;
+                    break;
+                }
+            }
+        }
+        
+        if (detectedCourier) {
+            return {
+                platform: 'MEESHO',
+                subGroup: meeshoReturnAddress.toUpperCase(),
+                courier: detectedCourier
+            };
+        }
+    }
+    
+    // ========================================
+    // FLIPKART: Look for "Shipping/Customer address:" and "Sold By/by" in items
+    // ========================================
+    const shippingKeyword = (LABEL_CRITERIA.flipkart.shippingAddressKeyword || 'Shipping/Customer address:').toUpperCase();
+    const hasShippingAddr = allTextUpper.includes(shippingKeyword);
+    
+    if (hasShippingAddr) {
+        console.log('[Flipkart Detection] Found shipping keyword, looking for seller...');
+        // Look for "Sold By" or "Sold by" in individual items
+        let sellerName = null;
+        for (let i = 0; i < itemStrings.length; i++) {
+            const s = itemStrings[i];
+            // Check if item contains "Sold By: XXXX" or "Sold by : XXXX" with the name inline
+            const soldByInlineMatch = s.match(/Sold\s*[Bb]y\s*:\s*([A-Za-z].+)/i);
+            if (soldByInlineMatch && soldByInlineMatch[1].trim()) {
+                sellerName = soldByInlineMatch[1].trim();
+                console.log(`[Flipkart] Inline match at [${i}]: "${s}" -> captured: "${sellerName}"`);
+                // Clean up: remove trailing address parts
+                sellerName = sellerName.replace(/\s*,.*$/, '').replace(/\s+\d{2,}.*$/, '').trim();
+                console.log(`[Flipkart] After cleanup: "${sellerName}"`);
+                if (sellerName.length > 0) break;
+            }
+            // Check if item is "Sold By", "Sold By:", "Sold by :" etc. WITHOUT name inline
+            // Then look at next items for the actual name
+            if (/^Sold\s*[Bb]y\s*:?\s*$/i.test(s) || /^Sold\s*[Bb]y\s*$/i.test(s)) {
+                console.log(`[Flipkart] Split match at [${i}]: "${s}"`);
+                for (let j = i + 1; j < Math.min(i + 4, itemStrings.length); j++) {
+                    let candidate = itemStrings[j].trim();
+                    console.log(`[Flipkart] Checking [${j}]: "${candidate}"`);
+                    // Skip colons, empty strings, short punctuation
+                    if (!candidate || candidate.length < 2 || /^[:\s.,]+$/.test(candidate)) {
+                        console.log(`[Flipkart] -> Skipped (empty/short/punctuation)`);
+                        continue;
+                    }
+                    // Remove leading colon if present (e.g., ": JB CREATIONS")
+                    candidate = candidate.replace(/^[:\s]+/, '').trim();
+                    if (candidate.length >= 2 && /^[A-Za-z]/.test(candidate)) {
+                        sellerName = candidate.replace(/\s*,.*$/, '').replace(/\s+\d{2,}.*$/, '').trim();
+                        console.log(`[Flipkart] -> Accepted: "${sellerName}"`);
+                        break;
+                    } else {
+                        console.log(`[Flipkart] -> Rejected (doesn't start with letter or too short)`);
+                    }
+                }
+                if (sellerName) break;
+            }
+        }
+        
+        console.log(`[Flipkart] Final seller name: "${sellerName || 'UNKNOWN SELLER'}"`);
+        
+        return {
+            platform: 'FLIPKART',
+            subGroup: sellerName ? sellerName.toUpperCase() : 'UNKNOWN SELLER',
+            seller: sellerName || 'Unknown'
+        };
+    }
+    
+    return null;
+}
+
+/**
+ * Item-level platform detection for the sorter tab.
+ */
+function detectPlatformFromItems(rawItems) {
+    const itemStrings = rawItems
+        .filter(item => item.str && item.str.trim())
+        .map(item => item.str.trim());
+    const allTextUpper = itemStrings.join(' ').toUpperCase();
+    
+    // Meesho check: return address + courier + pickup
+    let meeshoReturnAddress = null;
+    for (let i = 0; i < itemStrings.length; i++) {
+        const s = itemStrings[i];
+        const retMatch = s.match(/(?:return\s+to|undelivered.*return.*to):?\s*$/i);
+        if (retMatch) {
+            for (let j = i + 1; j < Math.min(i + 5, itemStrings.length); j++) {
+                const candidate = itemStrings[j].trim();
+                if (candidate && candidate.length >= 2 && /^[A-Za-z][A-Za-z0-9_-]*$/.test(candidate)) {
+                    meeshoReturnAddress = candidate;
+                    break;
+                }
+            }
+            if (meeshoReturnAddress) break;
+        }
+        const fullMatch = s.match(/return\s+to:?\s+([A-Za-z][A-Za-z0-9_-]+)/i);
+        if (fullMatch) { meeshoReturnAddress = fullMatch[1]; break; }
+        const partialMatch = s.match(/if\s+undelivered.*return\s+to:?\s*([A-Za-z][A-Za-z0-9_-]+)/i);
+        if (partialMatch && partialMatch[1]) { meeshoReturnAddress = partialMatch[1]; break; }
+    }
+    
+    if (meeshoReturnAddress) {
+        const couriers = LABEL_CRITERIA.meesho.couriers || ['DELHIVERY', 'SHADOWFAX', 'VALMO', 'XPRESS BEES'];
+        const pickupKeyword = (LABEL_CRITERIA.meesho.pickupKeyword || 'PICKUP').toUpperCase();
+        const hasPickup = allTextUpper.includes(pickupKeyword);
+        let hasCourier = false;
+        if (hasPickup) {
+            for (const courier of couriers) {
+                if (allTextUpper.includes(courier.toUpperCase())) { hasCourier = true; break; }
+            }
+        }
+        if (hasCourier) {
+            return { platform: 'meesho', subGroup: meeshoReturnAddress.toUpperCase() };
+        }
+    }
+    
+    // Flipkart check
+    const shippingKeyword = (LABEL_CRITERIA.flipkart.shippingAddressKeyword || 'Shipping/Customer address:').toUpperCase();
+    if (allTextUpper.includes(shippingKeyword)) {
+        console.log('[FK Sorter] Found shipping keyword, searching for seller...');
+        let sellerName = null;
+        for (let i = 0; i < itemStrings.length; i++) {
+            const soldByInlineMatch = itemStrings[i].match(/Sold\s*[Bb]y\s*:\s*([A-Za-z].+)/i);
+            if (soldByInlineMatch && soldByInlineMatch[1].trim()) {
+                sellerName = soldByInlineMatch[1].trim().replace(/\s*,.*$/, '').replace(/\s+\d{2,}.*$/, '').trim();
+                console.log(`[FK Sorter] Inline match: "${sellerName}"`);
+                if (sellerName.length > 0) break;
+            }
+            if (/^Sold\s*[Bb]y\s*:?\s*$/i.test(itemStrings[i]) || /^Sold\s*[Bb]y\s*$/i.test(itemStrings[i])) {
+                console.log(`[FK Sorter] Split match at [${i}]: "${itemStrings[i]}"`);
+                for (let j = i + 1; j < Math.min(i + 4, itemStrings.length); j++) {
+                    let candidate = itemStrings[j].trim();
+                    if (!candidate || candidate.length < 2 || /^[:\s.,]+$/.test(candidate)) continue;
+                    candidate = candidate.replace(/^[:\s]+/, '').trim();
+                    if (candidate.length >= 2 && /^[A-Za-z]/.test(candidate)) {
+                        sellerName = candidate.replace(/\s*,.*$/, '').replace(/\s+\d{2,}.*$/, '').trim();
+                        console.log(`[FK Sorter] Split seller: "${sellerName}"`);
+                        break;
+                    }
+                }
+                if (sellerName) break;
+            }
+        }
+        console.log(`[FK Sorter] Final: "${sellerName || 'UNKNOWN SELLER'}"`);
+        return { platform: 'flipkart', subGroup: sellerName ? sellerName.toUpperCase() : 'UNKNOWN SELLER' };
+    }
+    
+    // Amazon check
+    if (allTextUpper.includes('AMAZON') || allTextUpper.includes('AMAZON.IN')) {
+        return { platform: 'amazon', subGroup: 'AMAZON' };
+    }
+    
+    return { platform: 'unknown', subGroup: 'UNKNOWN' };
 }
 
 function extractLabelInfo(text, fileName, pageNum) {
@@ -724,13 +1134,18 @@ function extractLabelInfo(text, fileName, pageNum) {
 function determineSkipReason(text) {
     const textUpper = text.toUpperCase();
     
-    // Check what patterns were found
+    // Check what patterns were found (use flexible patterns to catch rotated text)
     const hasReturnAddress = /if\s+undelivered,?\s+return\s+to:/i.test(text);
     const hasShippingAddress = text.includes('Shipping/Customer address:') || textUpper.includes('SHIPPING/CUSTOMER ADDRESS:');
     const hasCourier = textUpper.includes('DELHIVERY') || textUpper.includes('SHADOWFAX') || 
                        textUpper.includes('VALMO') || textUpper.includes('XPRESS BEES');
     const hasPickup = textUpper.includes('PICKUP');
-    const hasSoldBy = /Sold\s+By:/i.test(text);
+    const hasSoldBy = /Sold\s*By\s*:/i.test(text);
+    
+    // Check for partial platform indicators (might be rotated/garbled)
+    const hasMeeshoKeywords = textUpper.includes('MEESHO') || textUpper.includes('UNDELIVERED');
+    const hasFlipkartKeywords = textUpper.includes('FLIPKART') || textUpper.includes('EKART') || 
+                                 textUpper.includes('SOLD BY');
     
     // Determine most likely reason
     if (hasReturnAddress && hasCourier && !hasPickup) {
@@ -739,12 +1154,18 @@ function determineSkipReason(text) {
         return 'Meesho return address found, but no valid courier detected';
     } else if (hasShippingAddress && !hasSoldBy) {
         return 'Flipkart shipping address found, but missing "Sold By" field';
+    } else if (hasShippingAddress && hasSoldBy) {
+        return 'Flipkart label detected but seller name could not be extracted';
     } else if (hasCourier && !hasReturnAddress && !hasShippingAddress) {
         return 'Courier found but missing platform identifiers';
+    } else if (hasMeeshoKeywords && !hasReturnAddress) {
+        return 'Possible Meesho label but text may be rotated/unreadable';
+    } else if (hasFlipkartKeywords && !hasShippingAddress) {
+        return 'Possible Flipkart label but text may be rotated/unreadable';
     } else if (text.trim().length < 50) {
         return 'Page content too short or mostly blank';
     } else {
-        return 'No Meesho or Flipkart identifiers found';
+        return 'No Meesho or Flipkart identifiers found (may be rotated or different format)';
     }
 }
 
@@ -1273,19 +1694,26 @@ async function extractPagesFromPDF(file) {
     for (let i = 1; i <= pdf.numPages; i++) {
         const page = await pdf.getPage(i);
         const textContent = await page.getTextContent();
-        const text = textContent.items.map(item => item.str).join(' ');
         
-        // Detect platform from text content (more accurate)
-        const textDetection = detectPlatformFromText(text);
+        // Extract text with rotation support (handles 90°, 180°, 270° rotated labels)
+        const textVariants = extractTextWithRotationSupport(textContent);
+        
+        // Detect platform from text content trying all rotation variants
+        // Pass raw items for item-level fallback detection (handles rotated labels)
+        const rawItems = textContent.items;
+        const textDetection = detectPlatformFromTextMulti(textVariants, rawItems);
         
         // Use text-based detection if available, otherwise use filename
         const platform = textDetection.platform !== 'unknown' ? textDetection.platform : filenamePlatform;
         const subGroup = textDetection.subGroup;
         
+        // Combine all text variants for priority label search (handles rotated text)
+        const combinedText = textVariants.join(' ');
+        
         pages.push({
             fileName: file.name,
             pageNumber: i,
-            text: text.toLowerCase(),
+            text: combinedText.toLowerCase(),
             platform: platform,
             subGroup: subGroup,  // Store sub-group info (XID, JBCREATIONS, seller name, etc.)
             fileRef: file  // Store file reference instead of ArrayBuffer
