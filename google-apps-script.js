@@ -4,7 +4,7 @@
 // ============================================
 
 // ============================================
-// YOUR EXISTING FUNCTIONS (unchanged)
+// YOUR EXISTING FUNCTIONS (updated to read threshold from S7)
 // ============================================
 
 function findDaysForNeedInSheet() {
@@ -18,7 +18,8 @@ function findDaysForNeedInSheet() {
 
   const needCell = sheet.getRange("S3");
   const daysCell = sheet.getRange("S11");
-  const targetNeedThreshold = 350;
+  const thresholdCell = sheet.getRange("S7");
+  const targetNeedThreshold = thresholdCell.getValue() || 150; // Read from S7, default to 150 if empty
 
   let initialNeedValue = needCell.getValue();
   let currentDays = daysCell.getValue();
@@ -31,6 +32,7 @@ function findDaysForNeedInSheet() {
   Logger.log("Value in S11 (daysCell): " + currentDays);
   Logger.log("Type of S11 value: " + typeof currentDays);
   Logger.log("isNaN(currentDays): " + isNaN(currentDays));
+  Logger.log("Value in S7 (targetNeedThreshold): " + targetNeedThreshold);
 
   if (typeof initialNeedValue !== 'number' || isNaN(initialNeedValue)) {
     Logger.log("Error: S3 does not contain a valid number.");
@@ -74,7 +76,7 @@ function findDaysForNeedInSheet() {
       daysCell.setValue(currentDays);
     }
 
-    const MAX_DAYS_LIMIT = 450;
+    const MAX_DAYS_LIMIT = 25;
 
     while (true) {
       currentDays = currentDays + 1;
@@ -150,7 +152,8 @@ function findDaysForNeedInSheet_WebSafe() {
 
   const needCell = sheet.getRange("S3");
   const daysCell = sheet.getRange("S11");
-  const targetNeedThreshold = 350;
+  const thresholdCell = sheet.getRange("S7");
+  const targetNeedThreshold = thresholdCell.getValue() || 150; // Read from S7, default to 150 if empty
 
   let initialNeedValue = needCell.getValue();
   let currentDays = daysCell.getValue();
@@ -159,6 +162,7 @@ function findDaysForNeedInSheet_WebSafe() {
   Logger.log("Sheet Name: " + sheet.getName());
   Logger.log("Value in S3 (needCell): " + initialNeedValue);
   Logger.log("Value in S11 (daysCell): " + currentDays);
+  Logger.log("Value in S7 (targetNeedThreshold): " + targetNeedThreshold);
 
   if (typeof initialNeedValue !== 'number' || isNaN(initialNeedValue)) {
     Logger.log("Error: S3 is not a valid number");
@@ -211,7 +215,7 @@ function findDaysForNeedInSheet_WebSafe() {
       daysCell.setValue(currentDays);
     }
 
-    const MAX_DAYS_LIMIT = 450;
+    const MAX_DAYS_LIMIT = 25;
 
     while (true) {
       currentDays = currentDays + 1;
@@ -285,6 +289,10 @@ function doPost(e) {
     
     if (data.action === 'saveLabelCriteria') {
       return handleSaveLabelCriteria(data);
+    }
+    
+    if (data.action === 'saveAppConfig') {
+      return handleSaveAppConfig(data);
     }
     
     return ContentService.createTextOutput(JSON.stringify({
@@ -380,6 +388,16 @@ function handleDeductStock(data) {
     daysAdjustmentResult = { success: false, message: triggerError.toString() };
   }
   
+  // Write the deducted labels to "Orders From Stock" sheet
+  var ordersResult = null;
+  try {
+    ordersResult = writeOrdersFromStock(labelCounts);
+    Logger.log("Orders From Stock updated: " + JSON.stringify(ordersResult));
+  } catch (ordersError) {
+    Logger.log("Error writing to Orders From Stock: " + ordersError.toString());
+    ordersResult = { success: false, message: ordersError.toString() };
+  }
+  
   return ContentService.createTextOutput(JSON.stringify({
     success: true,
     message: 'Stock updated successfully',
@@ -387,7 +405,8 @@ function handleDeductStock(data) {
     errors: errors,
     totalUpdated: updates.length,
     totalErrors: errors.length,
-    daysAdjustment: daysAdjustmentResult
+    daysAdjustment: daysAdjustmentResult,
+    ordersFromStock: ordersResult
   })).setMimeType(ContentService.MimeType.JSON);
 }
 
@@ -408,11 +427,16 @@ function doGet(e) {
     return handleGetLabelCriteria();
   }
   
+  // Handle getAppConfig action
+  if (action === 'getAppConfig') {
+    return handleGetAppConfig();
+  }
+  
   return ContentService.createTextOutput(JSON.stringify({
     status: 'ok',
     message: 'JB Creations Stock Update API is running',
     timestamp: new Date().toISOString(),
-    availableActions: ['deductStock', 'savePriorityLabels', 'getPriorityLabels', 'saveLabelCriteria', 'getLabelCriteria']
+    availableActions: ['deductStock', 'savePriorityLabels', 'getPriorityLabels', 'saveLabelCriteria', 'getLabelCriteria', 'saveAppConfig', 'getAppConfig']
   })).setMimeType(ContentService.MimeType.JSON);
 }
 
@@ -789,6 +813,186 @@ function testLabelCriteria() {
   Logger.log('Get Test Result: ' + getResult.getContent());
 }
 
+// ============================================
+// APP CONFIGURATION MANAGEMENT
+// Store app configuration (Google Sheets settings) in a dedicated sheet
+// ============================================
+
+var APP_CONFIG_SHEET_NAME = 'APP_CONFIG';
+
+/**
+ * Get or create the app configuration sheet
+ */
+function getAppConfigSheet() {
+  var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = spreadsheet.getSheetByName(APP_CONFIG_SHEET_NAME);
+  
+  if (!sheet) {
+    // Create the sheet if it doesn't exist
+    sheet = spreadsheet.insertSheet(APP_CONFIG_SHEET_NAME);
+    
+    // Add headers
+    sheet.getRange('A1').setValue('Setting Key');
+    sheet.getRange('B1').setValue('Setting Value');
+    sheet.getRange('A1:B1').setFontWeight('bold');
+    sheet.getRange('A1:B1').setBackground('#10b981');
+    sheet.getRange('A1:B1').setFontColor('white');
+    sheet.setColumnWidth(1, 200);
+    sheet.setColumnWidth(2, 400);
+    
+    Logger.log('Created new APP_CONFIG sheet');
+  }
+  
+  return sheet;
+}
+
+/**
+ * Handle saving app configuration to Google Sheets
+ */
+function handleSaveAppConfig(data) {
+  try {
+    var config = data.config;
+    
+    if (!config) {
+      return ContentService.createTextOutput(JSON.stringify({
+        success: false,
+        message: 'No configuration provided'
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    var sheet = getAppConfigSheet();
+    
+    // Clear existing config (except header)
+    var lastRow = sheet.getLastRow();
+    if (lastRow > 1) {
+      sheet.getRange(2, 1, lastRow - 1, 2).clear();
+    }
+    
+    // Write config as key-value pairs starting from row 2
+    var configData = [
+      ['spreadsheetId', config.spreadsheetId || ''],
+      ['sheetName', config.sheetName || 'STOCK COUNT'],
+      ['apiKey', config.apiKey || ''],
+      ['webAppUrl', config.webAppUrl || '']
+    ];
+    
+    sheet.getRange(2, 1, configData.length, 2).setValues(configData);
+    
+    // Add timestamp
+    sheet.getRange('C1').setValue('Last Updated');
+    sheet.getRange('C1').setFontWeight('bold');
+    sheet.getRange('C2').setValue(new Date().toISOString());
+    sheet.setColumnWidth(3, 180);
+    
+    Logger.log('Saved app configuration to sheet');
+    
+    return ContentService.createTextOutput(JSON.stringify({
+      success: true,
+      message: 'App configuration saved successfully',
+      timestamp: new Date().toISOString()
+    })).setMimeType(ContentService.MimeType.JSON);
+    
+  } catch (error) {
+    Logger.log('Error saving app config: ' + error.toString());
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false,
+      message: 'Error saving config: ' + error.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+/**
+ * Handle getting app configuration from Google Sheets
+ */
+function handleGetAppConfig() {
+  try {
+    var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = spreadsheet.getSheetByName(APP_CONFIG_SHEET_NAME);
+    
+    if (!sheet) {
+      Logger.log('App config sheet not found, returning empty config');
+      return ContentService.createTextOutput(JSON.stringify({
+        success: true,
+        config: {},
+        message: 'App config sheet not found'
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    var lastRow = sheet.getLastRow();
+    
+    if (lastRow <= 1) {
+      // Only header exists, no config
+      return ContentService.createTextOutput(JSON.stringify({
+        success: true,
+        config: {},
+        message: 'No configuration found'
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    // Get all config key-value pairs
+    var range = sheet.getRange(2, 1, lastRow - 1, 2);
+    var values = range.getValues();
+    
+    // Build config object
+    var config = {};
+    
+    for (var i = 0; i < values.length; i++) {
+      var key = values[i][0];
+      var value = values[i][1];
+      
+      if (key) {
+        config[key] = value || '';
+      }
+    }
+    
+    // Get last updated timestamp if available
+    var lastUpdated = null;
+    try {
+      lastUpdated = sheet.getRange('C2').getValue();
+    } catch (e) {}
+    
+    Logger.log('Retrieved app configuration from sheet');
+    
+    return ContentService.createTextOutput(JSON.stringify({
+      success: true,
+      config: config,
+      lastUpdated: lastUpdated ? lastUpdated.toString() : null,
+      message: 'App configuration retrieved successfully'
+    })).setMimeType(ContentService.MimeType.JSON);
+    
+  } catch (error) {
+    Logger.log('Error getting app config: ' + error.toString());
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false,
+      config: {},
+      message: 'Error getting config: ' + error.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+/**
+ * Test function for app configuration
+ */
+function testAppConfig() {
+  // Test saving
+  var testSaveData = {
+    action: 'saveAppConfig',
+    config: {
+      spreadsheetId: '1234567890abcdef',
+      sheetName: 'STOCK COUNT',
+      apiKey: 'test-api-key',
+      webAppUrl: 'https://script.google.com/macros/s/test/exec'
+    }
+  };
+  
+  var saveResult = handleSaveAppConfig(testSaveData);
+  Logger.log('Save Test Result: ' + saveResult.getContent());
+  
+  // Test getting
+  var getResult = handleGetAppConfig();
+  Logger.log('Get Test Result: ' + getResult.getContent());
+}
+
 /**
  * Test function to manually test the stock deduction
  * You can run this from the Apps Script editor to test
@@ -841,4 +1045,287 @@ function getStockForLabel(labelName, sheetName) {
   }
   
   return null;
+}
+
+// ============================================
+// ORDERS FROM STOCK TRACKING FUNCTIONS
+// These functions write deducted labels to "Orders From Stock" sheet
+// and manage data archiving to "Orders From Stock yesterday"
+// ============================================
+
+/**
+ * Writes deducted labels to the "Orders From Stock" sheet
+ * Each label is written as many times as its count
+ * For example: bd18 with count 15 will write "bd18" 15 times in column A
+ * Date is stored in column B for tracking
+ * 
+ * @param {Object} labelCounts - Object with label names as keys and counts as values
+ */
+function writeOrdersFromStock(labelCounts) {
+  var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  
+  // Get or create the "Orders From Stock" sheet
+  var ordersSheet = spreadsheet.getSheetByName("Orders From Stock");
+  if (!ordersSheet) {
+    ordersSheet = spreadsheet.insertSheet("Orders From Stock");
+    Logger.log("Created new sheet: Orders From Stock");
+  }
+  
+  // First, archive old data (move yesterday's data, clear older data)
+  try {
+    archiveOrdersData();
+  } catch (archiveError) {
+    Logger.log("Warning: Error during archive, continuing with write: " + archiveError.toString());
+  }
+  
+  // Current date for tracking when data was entered
+  var currentDate = new Date();
+  var dateString = Utilities.formatDate(currentDate, Session.getScriptTimeZone(), "yyyy-MM-dd");
+  
+  // Prepare rows to append
+  var rowsToAppend = [];
+  
+  for (var label in labelCounts) {
+    var count = labelCounts[label];
+    // Write the label 'count' number of times
+    for (var i = 0; i < count; i++) {
+      rowsToAppend.push([label, dateString]);
+    }
+  }
+  
+  if (rowsToAppend.length > 0) {
+    // Re-fetch the sheet reference after archive operations
+    ordersSheet = spreadsheet.getSheetByName("Orders From Stock");
+    if (!ordersSheet) {
+      ordersSheet = spreadsheet.insertSheet("Orders From Stock");
+    }
+    
+    // Find the last row with data
+    var lastRow = ordersSheet.getLastRow();
+    
+    // Append all rows at once for efficiency
+    var startRow = lastRow + 1;
+    ordersSheet.getRange(startRow, 1, rowsToAppend.length, 2).setValues(rowsToAppend);
+    SpreadsheetApp.flush(); // Force write to complete
+    
+    Logger.log("Added " + rowsToAppend.length + " rows to Orders From Stock with date " + dateString);
+  }
+  
+  return {
+    success: true,
+    rowsAdded: rowsToAppend.length,
+    date: dateString
+  };
+}
+
+/**
+ * Helper function to convert any date value to yyyy-MM-dd string
+ * Handles Date objects, date strings, and various formats
+ * 
+ * @param {*} dateValue - The date value to convert
+ * @returns {string} Date in yyyy-MM-dd format, or empty string if invalid
+ */
+function toDateString(dateValue) {
+  if (!dateValue) return '';
+  
+  // Handle Date objects
+  if (dateValue instanceof Date) {
+    return Utilities.formatDate(dateValue, Session.getScriptTimeZone(), "yyyy-MM-dd");
+  }
+  
+  // Handle string values
+  var str = String(dateValue).trim();
+  
+  // Already in yyyy-MM-dd format
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
+    return str;
+  }
+  
+  // Try to parse as date
+  try {
+    var parsed = new Date(str);
+    if (!isNaN(parsed.getTime())) {
+      return Utilities.formatDate(parsed, Session.getScriptTimeZone(), "yyyy-MM-dd");
+    }
+  } catch (e) {}
+  
+  return '';
+}
+
+/**
+ * Archives orders data:
+ * 1. Moves yesterday's data from "Orders From Stock" to "Orders From Stock yesterday"
+ * 2. Clears data older than yesterday from "Orders From Stock yesterday"
+ */
+function archiveOrdersData() {
+  var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  
+  // Get the sheets
+  var ordersSheet = spreadsheet.getSheetByName("Orders From Stock");
+  var yesterdaySheet = spreadsheet.getSheetByName("Orders From Stock yesterday");
+  
+  // Create "Orders From Stock yesterday" if it doesn't exist
+  if (!yesterdaySheet) {
+    yesterdaySheet = spreadsheet.insertSheet("Orders From Stock yesterday");
+    Logger.log("Created new sheet: Orders From Stock yesterday");
+  }
+  
+  if (!ordersSheet) {
+    Logger.log("Orders From Stock sheet not found, skipping archive");
+    return;
+  }
+  
+  // Calculate today and yesterday dates
+  var today = new Date();
+  var todayString = Utilities.formatDate(today, Session.getScriptTimeZone(), "yyyy-MM-dd");
+  
+  var yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  var yesterdayString = Utilities.formatDate(yesterday, Session.getScriptTimeZone(), "yyyy-MM-dd");
+  
+  Logger.log("Archive - Today: " + todayString + ", Yesterday: " + yesterdayString);
+  
+  // First, clear old data from "Orders From Stock yesterday" (older than yesterday)
+  clearOldDataFromYesterdaySheet(yesterdaySheet, yesterdayString);
+  
+  // Then, move yesterday's data from "Orders From Stock" to "Orders From Stock yesterday"
+  moveYesterdayDataToArchive(ordersSheet, yesterdaySheet, todayString, yesterdayString);
+}
+
+/**
+ * Clears data older than yesterday from the "Orders From Stock yesterday" sheet
+ * 
+ * @param {Sheet} yesterdaySheet - The "Orders From Stock yesterday" sheet
+ * @param {string} yesterdayString - Yesterday's date in yyyy-MM-dd format
+ */
+function clearOldDataFromYesterdaySheet(yesterdaySheet, yesterdayString) {
+  var lastRow = yesterdaySheet.getLastRow();
+  
+  if (lastRow === 0) {
+    Logger.log("Orders From Stock yesterday sheet is empty, nothing to clear");
+    return;
+  }
+  
+  // Get all data from the sheet
+  var data = yesterdaySheet.getRange(1, 1, lastRow, 2).getValues();
+  
+  // Find rows to keep (only rows with yesterday's date)
+  var rowsToKeep = [];
+  var rowsCleared = 0;
+  
+  for (var i = 0; i < data.length; i++) {
+    var rowDate = toDateString(data[i][1]);
+    
+    // Keep only rows from yesterday
+    if (rowDate === yesterdayString) {
+      rowsToKeep.push(data[i]);
+    } else if (rowDate && rowDate !== "") {
+      rowsCleared++;
+    }
+  }
+  
+  // Clear the sheet and rewrite only the rows to keep
+  if (rowsCleared > 0) {
+    yesterdaySheet.clear();
+    
+    if (rowsToKeep.length > 0) {
+      yesterdaySheet.getRange(1, 1, rowsToKeep.length, 2).setValues(rowsToKeep);
+    }
+    
+    SpreadsheetApp.flush();
+    Logger.log("Cleared " + rowsCleared + " old rows from Orders From Stock yesterday, kept " + rowsToKeep.length);
+  } else {
+    Logger.log("No old data to clear from Orders From Stock yesterday");
+  }
+}
+
+/**
+ * Moves yesterday's data from "Orders From Stock" to "Orders From Stock yesterday"
+ * Keeps only today's data in "Orders From Stock"
+ * 
+ * @param {Sheet} ordersSheet - The "Orders From Stock" sheet
+ * @param {Sheet} yesterdaySheet - The "Orders From Stock yesterday" sheet
+ * @param {string} todayString - Today's date in yyyy-MM-dd format
+ * @param {string} yesterdayString - Yesterday's date in yyyy-MM-dd format
+ */
+function moveYesterdayDataToArchive(ordersSheet, yesterdaySheet, todayString, yesterdayString) {
+  var lastRow = ordersSheet.getLastRow();
+  
+  if (lastRow === 0) {
+    Logger.log("Orders From Stock sheet is empty, nothing to move");
+    return;
+  }
+  
+  // Get all data from the Orders From Stock sheet
+  var data = ordersSheet.getRange(1, 1, lastRow, 2).getValues();
+  
+  // Separate data by date
+  var yesterdayData = [];
+  var todaysData = [];
+  var olderData = [];
+  
+  for (var i = 0; i < data.length; i++) {
+    var rowDate = toDateString(data[i][1]);
+    
+    if (rowDate === todayString) {
+      // Keep today's data in the main sheet
+      todaysData.push(data[i]);
+    } else if (rowDate === yesterdayString) {
+      // Move yesterday's data to archive
+      yesterdayData.push(data[i]);
+    } else if (data[i][0] && String(data[i][0]).trim() !== "") {
+      // Data older than yesterday or without proper date - also move to archive
+      olderData.push(data[i]);
+      Logger.log("Found older data: label=" + data[i][0] + ", date=" + rowDate);
+    }
+  }
+  
+  // Move yesterday's data (and any older data) to the archive sheet
+  var dataToArchive = yesterdayData.concat(olderData);
+  if (dataToArchive.length > 0) {
+    var lastRowInYesterday = yesterdaySheet.getLastRow();
+    var startRow = lastRowInYesterday + 1;
+    yesterdaySheet.getRange(startRow, 1, dataToArchive.length, 2).setValues(dataToArchive);
+    Logger.log("Moved " + dataToArchive.length + " rows to Orders From Stock yesterday (" + 
+               yesterdayData.length + " from yesterday, " + olderData.length + " older)");
+  } else {
+    Logger.log("No yesterday/old data to move from Orders From Stock");
+  }
+  
+  // Only rewrite if we actually moved something (avoid unnecessary clear)
+  if (dataToArchive.length > 0) {
+    // Rewrite the Orders From Stock sheet with only today's data
+    ordersSheet.clear();
+    
+    if (todaysData.length > 0) {
+      ordersSheet.getRange(1, 1, todaysData.length, 2).setValues(todaysData);
+    }
+    
+    SpreadsheetApp.flush();
+    Logger.log("Orders From Stock now contains " + todaysData.length + " rows (today's data only)");
+  } else {
+    Logger.log("No data needed to be moved, Orders From Stock unchanged");
+  }
+}
+
+/**
+ * Test function to manually test the orders tracking
+ */
+function testWriteOrdersFromStock() {
+  var testLabelCounts = {
+    'bd18': 5,
+    'bd21': 3,
+    'ml03': 2
+  };
+  
+  var result = writeOrdersFromStock(testLabelCounts);
+  Logger.log("Test Result: " + JSON.stringify(result));
+}
+
+/**
+ * Test function to manually run the archive process
+ */
+function testArchiveOrdersData() {
+  archiveOrdersData();
+  Logger.log("Archive process completed");
 }

@@ -337,6 +337,9 @@ function initializeApp() {
     
     // Load priority labels from cloud (async, will update UI when loaded)
     loadPriorityLabelsFromCloud();
+    
+    // Load app configuration from cloud (async, will update settings when loaded)
+    loadAppConfigFromCloud();
 }
 
 function displayPriorityList() {
@@ -380,6 +383,106 @@ async function loadPriorityLabelsFromCloud() {
     } catch (error) {
         console.error('Error loading priority labels from cloud:', error);
         // Silently use default labels if load fails
+    }
+}
+
+// Load app configuration from Google Sheets
+async function loadAppConfigFromCloud() {
+    // First check if we have a webAppUrl in localStorage to bootstrap
+    const bootstrapUrl = localStorage.getItem('googleWebAppUrl');
+    if (!bootstrapUrl) {
+        console.log('No Google Sheets URL configured, skipping cloud config load');
+        return;
+    }
+    
+    // Temporarily use the bootstrap URL to fetch the full config
+    const tempUrl = bootstrapUrl;
+    
+    try {
+        const url = `${tempUrl}?action=getAppConfig`;
+        
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: {
+                'Accept': 'application/json',
+            }
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            
+            if (data.success && data.config && Object.keys(data.config).length > 0) {
+                // Update GOOGLE_SHEETS_CONFIG with cloud values
+                if (data.config.spreadsheetId) {
+                    GOOGLE_SHEETS_CONFIG.spreadsheetId = data.config.spreadsheetId;
+                    localStorage.setItem('googleSheetsId', data.config.spreadsheetId);
+                }
+                if (data.config.sheetName) {
+                    GOOGLE_SHEETS_CONFIG.sheetName = data.config.sheetName;
+                    localStorage.setItem('googleSheetName', data.config.sheetName);
+                }
+                if (data.config.apiKey) {
+                    GOOGLE_SHEETS_CONFIG.apiKey = data.config.apiKey;
+                    localStorage.setItem('googleApiKey', data.config.apiKey);
+                }
+                if (data.config.webAppUrl) {
+                    GOOGLE_SHEETS_CONFIG.webAppUrl = data.config.webAppUrl;
+                    localStorage.setItem('googleWebAppUrl', data.config.webAppUrl);
+                }
+                
+                // Update status display
+                updateGoogleSheetsStatus();
+                
+                console.log('✅ Loaded app configuration from cloud');
+                showCloudSyncNotification('✅ Google Sheets config synced from cloud');
+            } else {
+                console.log('No app configuration found in cloud, using local settings');
+            }
+        }
+    } catch (error) {
+        console.error('Error loading app configuration from cloud:', error);
+        // Silently use local settings if load fails
+    }
+}
+
+// Save app configuration to Google Sheets
+async function saveAppConfigToCloud(config) {
+    if (!config.webAppUrl) {
+        console.log('No webAppUrl configured, skipping cloud sync');
+        return;
+    }
+    
+    try {
+        const response = await fetch(config.webAppUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'text/plain',
+            },
+            body: JSON.stringify({
+                action: 'saveAppConfig',
+                config: config
+            }),
+            redirect: 'follow'
+        });
+        
+        let result;
+        try {
+            const text = await response.text();
+            result = JSON.parse(text);
+        } catch (parseError) {
+            if (response.ok) {
+                result = { success: true };
+            } else {
+                throw new Error('Failed to save config: ' + response.status);
+            }
+        }
+        
+        if (result.success) {
+            console.log('✅ App configuration saved to cloud');
+            showCloudSyncNotification('✅ Config synced to cloud');
+        }
+    } catch (error) {
+        console.error('Error saving app configuration to cloud:', error);
     }
 }
 
@@ -2319,7 +2422,7 @@ function hideGoogleSheetsModal() {
 
 function saveGoogleSheetsConfig() {
     GOOGLE_SHEETS_CONFIG.spreadsheetId = sheetsIdInput.value.trim();
-    GOOGLE_SHEETS_CONFIG.sheetName = sheetNameInput.value.trim() || 'Sheet1';
+    GOOGLE_SHEETS_CONFIG.sheetName = sheetNameInput.value.trim() || 'STOCK COUNT';
     GOOGLE_SHEETS_CONFIG.webAppUrl = webAppUrlInput.value.trim();
     
     // Save to localStorage
@@ -2327,9 +2430,12 @@ function saveGoogleSheetsConfig() {
     localStorage.setItem('googleSheetName', GOOGLE_SHEETS_CONFIG.sheetName);
     localStorage.setItem('googleWebAppUrl', GOOGLE_SHEETS_CONFIG.webAppUrl);
     
+    // Save to cloud (async, non-blocking)
+    saveAppConfigToCloud(GOOGLE_SHEETS_CONFIG);
+    
     hideGoogleSheetsModal();
     updateGoogleSheetsStatus();
-    alert('✅ Google Sheets configuration saved!');
+    alert('✅ Google Sheets configuration saved and syncing to cloud!');
 }
 
 function updateGoogleSheetsStatus() {
