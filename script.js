@@ -274,6 +274,7 @@ const resultsSection = document.getElementById('resultsSection');
 const progressFill = document.getElementById('progressFill');
 const statusText = document.getElementById('statusText');
 const downloadBtn = document.getElementById('downloadBtn');
+const updateStockBtn = document.getElementById('updateStockBtn');
 const priorityList = document.getElementById('priorityList');
 const platformInfo = document.getElementById('platformInfo');
 const platformStats = document.getElementById('platformStats');
@@ -331,7 +332,7 @@ function initializeApp() {
     
     // Restore active tab from localStorage
     const savedTab = localStorage.getItem('activeTab');
-    if (savedTab && (savedTab === 'sorting' || savedTab === 'counter')) {
+    if (savedTab && (savedTab === 'sorting' || savedTab === 'counter' || savedTab === 'cropping')) {
         switchTab(savedTab);
     }
     
@@ -555,6 +556,11 @@ function setupEventListeners() {
     
     // Download button
     downloadBtn.addEventListener('click', downloadSortedPDF);
+
+    // Manual stock update button
+    if (updateStockBtn) {
+        updateStockBtn.addEventListener('click', updateStockToGoogleSheets);
+    }
     
     // Clear button
     clearBtn.addEventListener('click', clearFiles);
@@ -723,38 +729,87 @@ async function processCounterLabels() {
             counterStatusText.textContent = `Processing file ${fileIdx + 1} of ${counterUploadedFiles.length}: ${file.name}`;
             
             const arrayBuffer = await file.arrayBuffer();
-            const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
-            
-            for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-                const page = await pdf.getPage(pageNum);
+            const sourceBytes = new Uint8Array(arrayBuffer);
+
+            // Use separate byte copies per library to avoid detached ArrayBuffer issues
+            const sourcePdfJsBytes = new Uint8Array(sourceBytes);
+            const sourcePdf = await pdfjsLib.getDocument({ data: sourcePdfJsBytes }).promise;
+            const barcodePageNumbers = [];
+
+            // Pass 1: identify pages that contain barcode-like content
+            for (let pageNum = 1; pageNum <= sourcePdf.numPages; pageNum++) {
+                const page = await sourcePdf.getPage(pageNum);
                 const textContent = await page.getTextContent();
-                
-                // Extract text with rotation support (handles 90°, 180°, 270° rotated labels)
                 const textVariants = extractTextWithRotationSupport(textContent);
-                
-                // Try matching label info against all rotation variants
-                // Pass raw items for item-level fallback detection (handles rotated labels)
                 const rawItems = textContent.items;
-                const labelInfo = extractLabelInfoMulti(textVariants, file.name, pageNum, rawItems);
+
+                const hasBarcodeLikeContent = hasBarcodeLikeContentForCounter(textVariants, rawItems);
+
+                if (hasBarcodeLikeContent) {
+                    barcodePageNumbers.push(pageNum);
+                }
+
+                const scanProgress = ((fileIdx * 100 / counterUploadedFiles.length) +
+                    (pageNum / sourcePdf.numPages * 50 / counterUploadedFiles.length));
+                counterProgressFill.style.width = `${scanProgress}%`;
+            }
+
+            // No label pages in this file
+            if (barcodePageNumbers.length === 0) {
+                continue;
+            }
+
+            // Pass 2: create barcode-only PDF by removing non-barcode pages
+            counterStatusText.textContent = `Filtering barcode pages in ${file.name}...`;
+            const sourcePdfLibBytes = sourceBytes.slice();
+            const sourcePdfLib = await PDFLib.PDFDocument.load(sourcePdfLibBytes);
+            const filteredPdfDoc = await PDFLib.PDFDocument.create();
+            const pageIndexesToKeep = barcodePageNumbers.map(pageNum => pageNum - 1);
+            const copiedPages = await filteredPdfDoc.copyPages(sourcePdfLib, pageIndexesToKeep);
+            for (const copiedPage of copiedPages) {
+                filteredPdfDoc.addPage(copiedPage);
+            }
+
+            // Pass 3: process only pages from barcode-only PDF
+            const filteredPdfBytes = await filteredPdfDoc.save();
+            const barcodeOnlyPdf = await pdfjsLib.getDocument({ data: filteredPdfBytes }).promise;
+
+            counterStatusText.textContent = `Counting barcode pages in ${file.name}...`;
+            for (let filteredPageNum = 1; filteredPageNum <= barcodeOnlyPdf.numPages; filteredPageNum++) {
+                const page = await barcodeOnlyPdf.getPage(filteredPageNum);
+                const textContent = await page.getTextContent();
+                const textVariants = extractTextWithRotationSupport(textContent);
+                const rawItems = textContent.items;
+                const originalPageNum = barcodePageNumbers[filteredPageNum - 1] || filteredPageNum;
+
+                if (!hasBarcodeLikeContentForCounter(textVariants, rawItems)) {
+                    continue;
+                }
+
+                // Match label info only on barcode pages
+                const labelInfo = extractLabelInfoMulti(textVariants, file.name, originalPageNum, rawItems);
                 if (labelInfo) {
                     allLabelsData.push(labelInfo);
                 } else {
-                    // Page didn't match any criteria - track it with reason
-                    // Use combined text from all variants for skip reason analysis
                     const combinedText = textVariants.join(' ');
+                    const isInvoiceLikePage = /TAX\s+INVOICE|\bINVOICE\b|\bHSN\b|AMOUNT\s+IN\s+WORDS|TOTAL\s+AMOUNT|NET\s+AMOUNT|UNIT\s+PRICE|DESCRIPTION/i.test(combinedText);
+                    if (isInvoiceLikePage) {
+                        continue;
+                    }
                     const reason = determineSkipReason(combinedText);
                     skippedPages.push({
                         fileName: file.name,
-                        pageNum: pageNum,
+                        pageNum: originalPageNum,
                         fileIndex: fileIdx,
                         reason: reason
                     });
                 }
-                
+
                 totalPages++;
-                const progress = ((fileIdx * 100 / counterUploadedFiles.length) + 
-                    (pageNum / pdf.numPages * 100 / counterUploadedFiles.length));
-                counterProgressFill.style.width = `${progress}%`;
+                const parseProgress = ((fileIdx * 100 / counterUploadedFiles.length) +
+                    (50 / counterUploadedFiles.length) +
+                    (filteredPageNum / barcodeOnlyPdf.numPages * 50 / counterUploadedFiles.length));
+                counterProgressFill.style.width = `${Math.min(parseProgress, 100)}%`;
             }
         }
         
@@ -1760,7 +1815,7 @@ async function processLabels() {
         updateProgress(60, 'Analyzing labels...');
         
         // Sort pages based on priority
-        const { priorityPages, otherPages, matchedLabels, labelCounts } = sortPages(allPages);
+        const { priorityPages, otherPages, outputPages, matchedLabels, labelCounts, labelStatPages } = sortPages(allPages);
         
         // Store label counts globally for use during download
         labelOccurrences = labelCounts;
@@ -1771,12 +1826,15 @@ async function processLabels() {
         updateProgress(80, 'Creating sorted PDF...');
         
         // Create new PDF with sorted pages
-        processedPDF = await createSortedPDF([...priorityPages, ...otherPages], uploadedFiles);
+        processedPDF = await createSortedPDF(outputPages, uploadedFiles);
         
         updateProgress(100, 'Complete!');
         
-        // Display results with label counts
-        displayResults(allPages.length, priorityPages.length, otherPages.length, matchedLabels, allPages, labelCounts);
+        // Display results with barcode-label-only counts
+        const totalLabelPages = labelStatPages.length;
+        const matchedLabelPages = priorityPages.length;
+        const unmatchedLabelPages = Math.max(0, totalLabelPages - matchedLabelPages);
+        displayResults(totalLabelPages, matchedLabelPages, unmatchedLabelPages, matchedLabels, labelStatPages, labelCounts);
         
     } catch (error) {
         console.error('Error processing PDFs:', error);
@@ -1922,24 +1980,33 @@ function sortPages(pages) {
         priorityMap.set(label.toLowerCase(), index);
     });
     
-    // Categorize pages
-    for (const page of pages) {
+    // Step 1: pair label + invoice pages first (same file, immediate next page)
+    const pageOrders = buildPageOrdersByAdjacency(pages);
+
+    // Step 2: sort based on priority using only the LABEL page text in each order
+    const priorityOrders = [];
+    const otherOrders = [];
+
+    for (const order of pageOrders) {
+        const page = order.labelPage;
+
+        // Only barcode-identified label pages participate in label matching/counting stats
+        if (!order.isBarcodeLabel) {
+            otherOrders.push(order);
+            continue;
+        }
+
         let matched = false;
         let matchedLabel = null;
         let priorityIndex = Infinity;
-        
-        // Check if page text contains any priority label
+
         for (const label of PRIORITY_LABELS) {
             const labelLower = label.toLowerCase();
-            const textLower = page.text;
-            
-            // Find the label in the text
+            const textLower = page.text || '';
             const index = textLower.indexOf(labelLower);
+
             if (index !== -1) {
-                // Check the character immediately after the label
                 const charAfterLabel = textLower.charAt(index + labelLower.length);
-                
-                // Only match if there's NO comma or digit after the label
                 if (charAfterLabel !== ',' && !/\d/.test(charAfterLabel)) {
                     matched = true;
                     const currentIndex = priorityMap.get(labelLower);
@@ -1950,19 +2017,37 @@ function sortPages(pages) {
                 }
             }
         }
-        
+
         if (matched) {
-            priorityPages.push({ ...page, priorityIndex, matchedLabel });
+            const enrichedLabelPage = { ...page, priorityIndex, matchedLabel };
+            priorityPages.push(enrichedLabelPage);
+            priorityOrders.push({
+                ...order,
+                labelPage: enrichedLabelPage,
+                priorityIndex,
+                matchedLabel,
+            });
             matchedLabels.add(matchedLabel);
-            // Count the occurrence
             labelCounts[matchedLabel] = (labelCounts[matchedLabel] || 0) + 1;
         } else {
             otherPages.push(page);
+            otherOrders.push(order);
         }
     }
-    
-    // Sort priority pages by their priority index
-    priorityPages.sort((a, b) => a.priorityIndex - b.priorityIndex);
+
+    priorityOrders.sort((a, b) => a.priorityIndex - b.priorityIndex);
+
+    const outputPages = [];
+    for (const order of [...priorityOrders, ...otherOrders]) {
+        outputPages.push(order.labelPage);
+        for (const invoicePage of order.invoicePages) {
+            outputPages.push(invoicePage);
+        }
+    }
+
+    const labelStatPages = pageOrders
+        .filter(order => order.isBarcodeLabel)
+        .map(order => order.labelPage);
     
     // Filter to only labels that were found
     const foundLabelCounts = {};
@@ -1973,9 +2058,149 @@ function sortPages(pages) {
     return {
         priorityPages,
         otherPages,
+        outputPages,
+        labelStatPages,
         matchedLabels: Array.from(matchedLabels),
         labelCounts: foundLabelCounts // Return the counts
     };
+}
+
+function extractOverlayNumberFromText(text) {
+    if (!text || typeof text !== 'string') return null;
+    const match = text.match(/#\s*(\d{1,8})\b/);
+    return match ? match[1] : null;
+}
+
+function hasBarcodeLikeTextForSorter(text) {
+    if (!text || typeof text !== 'string') return false;
+    const upper = text.toUpperCase();
+
+    if (upper.includes('BARCODE')) return true;
+    if (/\*[A-Z0-9\-]{6,}\*/.test(upper)) return true;
+
+    // Compact alphanumeric barcode-like tokens
+    const tokens = upper.split(/\s+/).filter(Boolean);
+    for (const token of tokens) {
+        const compact = token.replace(/[^A-Z0-9\-]/g, '');
+        if (compact.length >= 10 && /\d/.test(compact) && /[A-Z]/.test(compact)) {
+            return true;
+        }
+        if (/^\d{12,}$/.test(compact)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function hasBarcodeLikeContentForCounter(textVariants, rawItems) {
+    const variants = Array.isArray(textVariants) ? textVariants : [];
+    const combinedText = variants.join(' ');
+    const combinedUpper = combinedText.toUpperCase();
+
+    const hasInvoiceHeavyMarkers =
+        /TAX\s+INVOICE|\bINVOICE\b|\bHSN\b|AMOUNT\s+IN\s+WORDS|TOTAL\s+AMOUNT|NET\s+AMOUNT/i.test(combinedText);
+
+    const hasStrongBarcodeKeywords =
+        /\bBARCODE\b|\bAWB\b|TRACKING\s*(ID|NO|NUMBER)?/i.test(combinedText);
+
+    const hasStarWrappedBarcode = /\*[A-Z0-9\-]{6,}\*/.test(combinedUpper);
+
+    const tokens = (rawItems || [])
+        .map(item => (item && item.str ? String(item.str).trim().toUpperCase() : ''))
+        .filter(Boolean);
+
+    let hasLongMixedToken = false;
+    let longNumericTokenCount = 0;
+
+    for (const token of tokens) {
+        const compact = token.replace(/[^A-Z0-9\-]/g, '');
+        if (!compact) continue;
+
+        if (compact.length >= 10 && /[A-Z]/.test(compact) && /\d/.test(compact)) {
+            hasLongMixedToken = true;
+        }
+        if (/^\d{12,}$/.test(compact)) {
+            longNumericTokenCount++;
+        }
+    }
+
+    const hasShippingLabelMarkers =
+        /SHIPPING|DELIVERY|PICKUP|SOLD\s*BY|RETURN\s+TO|SHIP\s+TO|CUSTOMER\s+ADDRESS|AWB\s*NO/i.test(combinedText);
+
+    if (hasStrongBarcodeKeywords || hasStarWrappedBarcode) {
+        return true;
+    }
+
+    // Mixed long tokens can appear in invoices (SKU/order ids), so require label context when invoice markers exist
+    if (hasLongMixedToken) {
+        if (hasInvoiceHeavyMarkers && !hasShippingLabelMarkers) return false;
+        return true;
+    }
+
+    if (longNumericTokenCount > 0) {
+        if (hasInvoiceHeavyMarkers) return false;
+        return hasShippingLabelMarkers;
+    }
+
+    return false;
+}
+
+function buildPageOrdersByAdjacency(pages) {
+    const orders = [];
+    const usedKeys = new Set();
+
+    // Group by source file first
+    const byFile = new Map();
+    for (const page of pages) {
+        if (!byFile.has(page.fileName)) byFile.set(page.fileName, []);
+        byFile.get(page.fileName).push(page);
+    }
+
+    for (const filePages of byFile.values()) {
+        filePages.sort((a, b) => a.pageNumber - b.pageNumber);
+
+        for (let i = 0; i < filePages.length; i++) {
+            const currentPage = filePages[i];
+            const currentKey = `${currentPage.fileName}::${currentPage.pageNumber}`;
+            if (usedKeys.has(currentKey)) continue;
+
+            const isLabelPage = hasBarcodeLikeTextForSorter(currentPage.text || '');
+            if (!isLabelPage) continue;
+
+            const nextPage = filePages[i + 1];
+            if (nextPage) {
+                const nextKey = `${nextPage.fileName}::${nextPage.pageNumber}`;
+                if (!usedKeys.has(nextKey)) {
+                    orders.push({ labelPage: currentPage, invoicePages: [nextPage], isBarcodeLabel: true });
+                    usedKeys.add(currentKey);
+                    usedKeys.add(nextKey);
+                    i++; // skip the paired next page
+                    continue;
+                }
+            }
+
+            // Label page exists but no available immediate next page to pair
+            orders.push({ labelPage: currentPage, invoicePages: [], isBarcodeLabel: true });
+            usedKeys.add(currentKey);
+        }
+    }
+
+    // Add any unpaired pages as standalone orders (keeps all pages in output)
+    const remainingPages = [...pages].sort((a, b) => {
+        if (a.fileName === b.fileName) return a.pageNumber - b.pageNumber;
+        return a.fileName.localeCompare(b.fileName);
+    });
+
+    for (const page of remainingPages) {
+        const key = `${page.fileName}::${page.pageNumber}`;
+        if (!usedKeys.has(key)) {
+            orders.push({ labelPage: page, invoicePages: [], isBarcodeLabel: false });
+            usedKeys.add(key);
+        }
+    }
+
+    return orders;
 }
 
 async function createSortedPDF(sortedPages, originalFiles) {
@@ -2075,7 +2300,7 @@ function displayResults(total, matched, unmatched, labels, allPages, labelCounts
                 <div class="platform-breakdown-icon">🛍️</div>
                 <span class="platform-breakdown-name">Meesho</span>
                 <span class="platform-breakdown-count">${platformCounts.meesho}</span>
-                <span class="platform-breakdown-label">pages processed</span>
+                <span class="platform-breakdown-label">labels processed</span>
             </div>
         `;
         
@@ -2113,7 +2338,7 @@ function displayResults(total, matched, unmatched, labels, allPages, labelCounts
                 <div class="platform-breakdown-icon">🛒</div>
                 <span class="platform-breakdown-name">Flipkart</span>
                 <span class="platform-breakdown-count">${platformCounts.flipkart}</span>
-                <span class="platform-breakdown-label">pages processed</span>
+                <span class="platform-breakdown-label">labels processed</span>
             </div>
         `;
         
@@ -2151,7 +2376,7 @@ function displayResults(total, matched, unmatched, labels, allPages, labelCounts
                 <div class="platform-breakdown-icon">📦</div>
                 <span class="platform-breakdown-name">Amazon</span>
                 <span class="platform-breakdown-count">${platformCounts.amazon}</span>
-                <span class="platform-breakdown-label">pages processed</span>
+                <span class="platform-breakdown-label">labels processed</span>
             </div>
         `;
         breakdownHtml += `</div>`; // Close amazon-section
@@ -2165,7 +2390,7 @@ function displayResults(total, matched, unmatched, labels, allPages, labelCounts
                 <div class="platform-breakdown-icon">❓</div>
                 <span class="platform-breakdown-name">Unknown</span>
                 <span class="platform-breakdown-count">${platformCounts.unknown}</span>
-                <span class="platform-breakdown-label">pages processed</span>
+                <span class="platform-breakdown-label">labels processed</span>
             </div>
         `;
         breakdownHtml += `</div>`; // Close unknown-section
@@ -2536,26 +2761,39 @@ async function downloadSortedPDF() {
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
         
-        // After successful download, deduct stock from Google Sheets (only once per processing)
-        if (Object.keys(labelOccurrences).length > 0 && GOOGLE_SHEETS_CONFIG.webAppUrl && !stockAlreadyDeducted) {
-            const result = await deductStockFromGoogleSheets(labelOccurrences);
-            if (result.success) {
-                console.log('Stock deducted successfully');
-                stockAlreadyDeducted = true; // Mark as deducted to prevent duplicate deductions
-            } else {
-                console.log('Stock deduction note:', result.message);
-            }
-        } else if (stockAlreadyDeducted) {
-            console.log('Stock already deducted for this batch - skipping duplicate deduction');
-            if (stockUpdateStatus) {
-                stockUpdateStatus.innerHTML = '<span class="status-success">✅ Stock already updated for this batch</span>';
-                stockUpdateStatus.style.display = 'block';
-            }
-        }
-        
     } catch (error) {
         console.error('Error downloading PDF:', error);
         alert('Error downloading PDF. Please try again.');
+    }
+}
+
+async function updateStockToGoogleSheets() {
+    if (!processedPDF) {
+        alert('Please process labels first before updating stock.');
+        return;
+    }
+
+    if (!GOOGLE_SHEETS_CONFIG.webAppUrl) {
+        alert('⚠️ Google Sheets is not configured. Please configure it first.');
+        return;
+    }
+
+    if (!labelOccurrences || Object.keys(labelOccurrences).length === 0) {
+        alert('No matched labels found to update stock.');
+        return;
+    }
+
+    if (stockAlreadyDeducted) {
+        if (stockUpdateStatus) {
+            stockUpdateStatus.innerHTML = '<span class="status-success">✅ Stock already updated for this batch</span>';
+            stockUpdateStatus.style.display = 'block';
+        }
+        return;
+    }
+
+    const result = await deductStockFromGoogleSheets(labelOccurrences);
+    if (result.success) {
+        stockAlreadyDeducted = true;
     }
 }
 
@@ -2755,3 +2993,1795 @@ function resetLabelCriteriaSettings() {
     alert('✅ Criteria reset to default values!');
 }
 
+
+// ============================================================
+// LABEL CROPPING & FORMATTING MODULE
+// All code below is modular and does not alter existing logic.
+// ============================================================
+
+// --- Cropping State ---
+let croppingUploadedFiles = [];
+let croppingResults = []; // Array of { filename, platform, blob, pageCount, sellerId }
+
+/**
+ * Detect platform from PDF text content for cropping purposes.
+ * Returns { platform: 'meesho'|'flipkart'|'amazon'|'unknown', sellerId: string }
+ * This is a simplified, more robust detection than the sorting/counter logic.
+ */
+async function detectCroppingPlatform(pdfData) {
+    const pdfjs = await pdfjsLib.getDocument({ data: pdfData.slice(0) }).promise;
+    const numPages = pdfjs.numPages;
+
+    // === AMAZON CHECK: page 2 must contain "Tax Invoice/Bill of Supply/Cash Memo" ===
+    if (numPages >= 2) {
+        const page2 = await pdfjs.getPage(2);
+        const tc2 = await page2.getTextContent();
+        const page2Text = tc2.items.map(i => i.str).join(' ');
+        if (page2Text.includes('Tax Invoice/Bill of Supply/Cash Memo')) {
+            return { platform: 'amazon', sellerId: 'AMAZON' };
+        }
+    }
+
+    // === Read page 1 text ===
+    const page1 = await pdfjs.getPage(1);
+    const tc1 = await page1.getTextContent();
+    const allText = tc1.items.map(i => i.str).join(' ');
+    const allTextUpper = allText.toUpperCase();
+    const itemStrings = tc1.items.map(i => i.str.trim()).filter(s => s);
+
+    // === MEESHO CHECK: "return to" + (PICKUP or MEESHO or courier keywords) ===
+    const hasReturnTo = /return\s+to/i.test(allText);
+    const hasPickup = allTextUpper.includes('PICKUP');
+    const hasMeesho = allTextUpper.includes('MEESHO');
+    const hasCourier = ['DELHIVERY', 'SHADOWFAX', 'VALMO', 'XPRESS BEES', 'ECOM EXPRESS', 'EKART'].some(c => allTextUpper.includes(c));
+    // Meesho labels have "return to" + a courier/PICKUP indicator
+    // OR just contain "MEESHO" directly
+    if (hasReturnTo && (hasPickup || hasCourier) || hasMeesho) {
+        // Extract seller ID
+        let sellerId = 'UNKNOWN';
+        sellerId = extractMeeshoSellerId(tc1.items);
+        return { platform: 'meesho', sellerId };
+    }
+
+    // === FLIPKART CHECK: "Shipping/Customer address:" or "Sold By" or "FLIPKART" ===
+    const hasShippingAddr = allText.includes('Shipping/Customer address:') || allTextUpper.includes('SHIPPING/CUSTOMER ADDRESS');
+    const hasSoldBy = /sold\s*by/i.test(allText);
+    const hasFlipkart = allTextUpper.includes('FLIPKART') || allTextUpper.includes('EKART') || allTextUpper.includes('FK-');
+    if (hasShippingAddr || (hasSoldBy && hasFlipkart)) {
+        // Extract seller name
+        let sellerId = 'UNKNOWN';
+        const soldByMatch = allText.match(/Sold\s*[Bb]y\s*:?\s*([A-Za-z][A-Za-z0-9 _\-]+)/i);
+        if (soldByMatch) {
+            sellerId = soldByMatch[1].trim().replace(/\s*,.*$/, '').toUpperCase();
+        }
+        return { platform: 'flipkart', sellerId };
+    }
+
+    // === AMAZON fallback (single page with Amazon text) ===
+    if (allTextUpper.includes('AMAZON') || allTextUpper.includes('AMAZON.IN')) {
+        return { platform: 'amazon', sellerId: 'AMAZON' };
+    }
+
+    return { platform: 'unknown', sellerId: 'UNKNOWN' };
+}
+
+// --- Cropping DOM Elements (lazy-loaded) ---
+function getCroppingElements() {
+    return {
+        uploadArea: document.getElementById('croppingUploadArea'),
+        fileInput: document.getElementById('croppingFileInput'),
+        clearBtn: document.getElementById('croppingClearBtn'),
+        filesInfo: document.getElementById('croppingFilesInfo'),
+        filesList: document.getElementById('croppingFilesList'),
+        actions: document.getElementById('croppingActions'),
+        autoBtn: document.getElementById('croppingAutoBtn'),
+        meeshoBtn: document.getElementById('croppingMeeshoBtn'),
+        flipkartBtn: document.getElementById('croppingFlipkartBtn'),
+        amazonBtn: document.getElementById('croppingAmazonBtn'),
+        statusSection: document.getElementById('croppingStatusSection'),
+        progressFill: document.getElementById('croppingProgressFill'),
+        statusText: document.getElementById('croppingStatusText'),
+        resultsSection: document.getElementById('croppingResultsSection'),
+        totalProcessed: document.getElementById('croppingTotalProcessed'),
+        platformCount: document.getElementById('croppingPlatformCount'),
+        outputList: document.getElementById('croppingOutputList'),
+        downloadAllBtn: document.getElementById('croppingDownloadAllBtn'),
+    };
+}
+
+// --- Init Cropping Tab ---
+function initCroppingTab() {
+    const el = getCroppingElements();
+    if (!el.uploadArea) return;
+
+    // Upload area click
+    el.uploadArea.addEventListener('click', (e) => {
+        if (e.target !== el.fileInput) el.fileInput.click();
+    });
+
+    // File input change
+    el.fileInput.addEventListener('change', handleCroppingFileSelect);
+
+    // Drag and drop
+    el.uploadArea.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        el.uploadArea.classList.add('dragover');
+    });
+    el.uploadArea.addEventListener('dragleave', () => {
+        el.uploadArea.classList.remove('dragover');
+    });
+    el.uploadArea.addEventListener('drop', (e) => {
+        e.preventDefault();
+        el.uploadArea.classList.remove('dragover');
+        const files = Array.from(e.dataTransfer.files).filter(f => f.type === 'application/pdf');
+        if (files.length > 0) handleCroppingFiles(files);
+    });
+
+    // Clear button
+    el.clearBtn.addEventListener('click', clearCroppingFiles);
+
+    // Platform buttons
+    el.autoBtn.addEventListener('click', () => processCropping('automatic'));
+    el.meeshoBtn.addEventListener('click', () => processCropping('meesho'));
+    el.flipkartBtn.addEventListener('click', () => processCropping('flipkart'));
+    el.amazonBtn.addEventListener('click', () => processCropping('amazon'));
+
+    // Download all
+    el.downloadAllBtn.addEventListener('click', downloadAllCropped);
+}
+
+function handleCroppingFileSelect(e) {
+    const files = Array.from(e.target.files).filter(f => f.type === 'application/pdf');
+    if (files.length > 0) handleCroppingFiles(files);
+}
+
+async function handleCroppingFiles(newFiles) {
+    const el = getCroppingElements();
+    // Merge with existing, deduplicate by name
+    for (const file of newFiles) {
+        const exists = croppingUploadedFiles.some(f => f.name === file.name && f.size === file.size);
+        if (!exists) croppingUploadedFiles.push(file);
+    }
+
+    el.clearBtn.style.display = 'inline-flex';
+    el.filesInfo.style.display = 'block';
+    el.actions.style.display = 'block';
+    el.resultsSection.style.display = 'none';
+
+    // Show file list with page counts
+    el.filesList.innerHTML = '';
+    for (const file of croppingUploadedFiles) {
+        const arrayBuffer = await file.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+        const div = document.createElement('div');
+        div.className = 'cropping-file-item';
+        div.innerHTML = `<span class="file-name">📄 ${file.name}</span><span class="file-pages">${pdf.numPages} pages</span>`;
+        el.filesList.appendChild(div);
+    }
+}
+
+function clearCroppingFiles() {
+    const el = getCroppingElements();
+    croppingUploadedFiles = [];
+    croppingResults = [];
+    el.fileInput.value = '';
+    el.clearBtn.style.display = 'none';
+    el.filesInfo.style.display = 'none';
+    el.actions.style.display = 'none';
+    el.statusSection.style.display = 'none';
+    el.resultsSection.style.display = 'none';
+    el.filesList.innerHTML = '';
+    el.outputList.innerHTML = '';
+}
+
+// --- Progress Helpers ---
+function updateCroppingProgress(pct, text) {
+    const el = getCroppingElements();
+    el.statusSection.style.display = 'block';
+    el.progressFill.style.width = `${pct}%`;
+    el.statusText.textContent = text;
+}
+
+// --- Main Processing Entry Point ---
+async function processCropping(mode) {
+    if (croppingUploadedFiles.length === 0) {
+        alert('Please upload at least one PDF file.');
+        return;
+    }
+    const el = getCroppingElements();
+    croppingResults = [];
+    el.resultsSection.style.display = 'none';
+    el.outputList.innerHTML = '';
+
+    // Disable buttons during processing
+    el.autoBtn.disabled = true;
+    el.meeshoBtn.disabled = true;
+    el.flipkartBtn.disabled = true;
+    el.amazonBtn.disabled = true;
+
+    try {
+        updateCroppingProgress(5, 'Reading PDF files...');
+
+        // Read all files into ArrayBuffers
+        const fileDataArray = [];
+        for (const file of croppingUploadedFiles) {
+            const arrayBuffer = await file.arrayBuffer();
+            fileDataArray.push({ name: file.name, data: arrayBuffer });
+        }
+
+        if (mode === 'automatic') {
+            await processCroppingAutomatic(fileDataArray);
+        } else {
+            await processCroppingManual(fileDataArray, mode);
+        }
+
+        // Display results
+        displayCroppingResults();
+    } catch (err) {
+        console.error('Cropping error:', err);
+        updateCroppingProgress(100, `❌ Error: ${err.message}`);
+    } finally {
+        el.autoBtn.disabled = false;
+        el.meeshoBtn.disabled = false;
+        el.flipkartBtn.disabled = false;
+        el.amazonBtn.disabled = false;
+    }
+}
+
+// ------------------------------------------------------------------
+// AUTOMATIC MODE: classify each PDF, then process per-platform
+// ------------------------------------------------------------------
+async function processCroppingAutomatic(fileDataArray) {
+    updateCroppingProgress(10, 'Classifying labels by platform...');
+
+    // Buckets: { meesho: [{data, pages, sellerId, name}], flipkart: [...], amazon: [...] }
+    const buckets = { meesho: [], flipkart: [], amazon: [] };
+    const unclassified = [];
+
+    for (let fi = 0; fi < fileDataArray.length; fi++) {
+        const { name, data } = fileDataArray[fi];
+        const pdfjs = await pdfjsLib.getDocument({ data: data.slice(0) }).promise;
+        const numPages = pdfjs.numPages;
+
+        // Use the dedicated cropping platform detection
+        const detected = await detectCroppingPlatform(data);
+        console.log(`[Cropping Auto] ${name} -> platform: ${detected.platform}, seller: ${detected.sellerId}`);
+
+        if (detected.platform === 'meesho') {
+            buckets.meesho.push({ name, data, numPages, sellerId: detected.sellerId });
+        } else if (detected.platform === 'flipkart') {
+            buckets.flipkart.push({ name, data, numPages, sellerId: detected.sellerId });
+        } else if (detected.platform === 'amazon') {
+            buckets.amazon.push({ name, data, numPages });
+        } else {
+            unclassified.push(name);
+            console.warn(`[Cropping] Could not classify ${name}`);
+        }
+
+        const pct = 10 + Math.round((fi + 1) / fileDataArray.length * 20);
+        updateCroppingProgress(pct, `Classified ${fi + 1}/${fileDataArray.length} files...`);
+    }
+
+    // Alert user about unclassified files
+    if (unclassified.length > 0) {
+        const msg = unclassified.length === fileDataArray.length
+            ? `Could not identify the platform for any of the uploaded files. Please use the specific platform button (Meesho, Flipkart, or Amazon) instead.`
+            : `Could not identify platform for: ${unclassified.join(', ')}. These files were skipped.`;
+        alert(msg);
+    }
+
+    // If all files were unclassified, stop
+    if (buckets.meesho.length === 0 && buckets.flipkart.length === 0 && buckets.amazon.length === 0) {
+        updateCroppingProgress(100, '❌ No labels could be classified. Try using platform-specific buttons.');
+        return;
+    }
+
+    // Process each bucket
+    let progress = 30;
+    const totalBuckets = (buckets.meesho.length > 0 ? 1 : 0) + (buckets.flipkart.length > 0 ? 1 : 0) + (buckets.amazon.length > 0 ? 1 : 0);
+    const pctPerBucket = totalBuckets > 0 ? 60 / totalBuckets : 60;
+
+    if (buckets.meesho.length > 0) {
+        updateCroppingProgress(progress, 'Processing Meesho labels...');
+        await processMeeshoBucket(buckets.meesho);
+        progress += pctPerBucket;
+    }
+    if (buckets.flipkart.length > 0) {
+        updateCroppingProgress(progress, 'Processing Flipkart labels...');
+        await processFlipkartBucket(buckets.flipkart);
+        progress += pctPerBucket;
+    }
+    if (buckets.amazon.length > 0) {
+        updateCroppingProgress(progress, 'Processing Amazon labels...');
+        await processAmazonBucket(buckets.amazon);
+        progress += pctPerBucket;
+    }
+
+    updateCroppingProgress(100, '✅ Processing complete!');
+}
+
+// ------------------------------------------------------------------
+// MANUAL MODE: treat all files as the selected platform, with validation
+// ------------------------------------------------------------------
+async function processCroppingManual(fileDataArray, platform) {
+    updateCroppingProgress(10, `Validating labels for ${platform}...`);
+
+    // First validate that all uploaded files actually belong to the selected platform
+    const validFiles = [];
+    const invalidFiles = [];
+
+    for (const { name, data } of fileDataArray) {
+        const detected = await detectCroppingPlatform(data);
+        console.log(`[Cropping Manual] ${name} -> detected: ${detected.platform}, expected: ${platform}`);
+
+        if (detected.platform === platform) {
+            const pdfjs = await pdfjsLib.getDocument({ data: data.slice(0) }).promise;
+            validFiles.push({ name, data, numPages: pdfjs.numPages, sellerId: detected.sellerId });
+        } else {
+            invalidFiles.push({ name, detectedPlatform: detected.platform });
+        }
+    }
+
+    // Show error popup for invalid files
+    if (invalidFiles.length > 0) {
+        const platformName = platform.charAt(0).toUpperCase() + platform.slice(1);
+        const fileDetails = invalidFiles.map(f => {
+            const detName = f.detectedPlatform === 'unknown' ? 'Unknown' : f.detectedPlatform.charAt(0).toUpperCase() + f.detectedPlatform.slice(1);
+            return `• ${f.name} (detected as ${detName})`;
+        }).join('\n');
+
+        if (validFiles.length === 0) {
+            alert(`❌ Invalid Labels!\n\nNone of the uploaded files are ${platformName} labels.\n\n${fileDetails}\n\nPlease upload valid ${platformName} labels or use the Automatic button.`);
+            updateCroppingProgress(100, `❌ No valid ${platformName} labels found.`);
+            return;
+        } else {
+            alert(`⚠️ Some files are not ${platformName} labels and will be skipped:\n\n${fileDetails}`);
+        }
+    }
+
+    if (validFiles.length === 0) {
+        updateCroppingProgress(100, `❌ No valid ${platform} labels to process.`);
+        return;
+    }
+
+    updateCroppingProgress(20, `Processing ${validFiles.length} ${platform} label(s)...`);
+
+    if (platform === 'meesho') {
+        await processMeeshoBucket(validFiles);
+    } else if (platform === 'flipkart') {
+        await processFlipkartBucket(validFiles);
+    } else if (platform === 'amazon') {
+        await processAmazonBucket(validFiles);
+    }
+
+    updateCroppingProgress(100, '✅ Processing complete!');
+}
+
+// ==================================================================
+// SELLER ID EXTRACTION HELPERS FOR CROPPING
+// ==================================================================
+
+/**
+ * Extract Meesho seller ID (return address) from text content items.
+ * Looks for "If undelivered, return to: SELLERNAME" pattern.
+ */
+function extractMeeshoSellerId(textContentItems) {
+    const items = textContentItems;
+    const fullText = items.map(i => i.str).join(' ');
+    
+    // Try multiple patterns
+    const patterns = [
+        /if\s+undelivered,?\s+return\s+to:?\s*([A-Za-z0-9_\-]+)/i,
+        /return\s+to:?\s*([A-Za-z0-9_\-]+)/i,
+        /return\s+address:?\s*([A-Za-z0-9_\-]+)/i
+    ];
+    
+    for (const pattern of patterns) {
+        const match = fullText.match(pattern);
+        if (match && match[1]) {
+            const sellerId = match[1].trim();
+            console.log(`[Meesho ID] Extracted seller ID: "${sellerId}"`);
+            return sellerId;
+        }
+    }
+    
+    // Positional approach: find "return to" text and read next items
+    for (let i = 0; i < items.length; i++) {
+        const s = items[i].str.toLowerCase();
+        if (s.includes('return to') || s.includes('return address')) {
+            // Look at next few items for the seller ID
+            for (let j = i + 1; j < Math.min(i + 5, items.length); j++) {
+                const candidate = items[j].str.trim();
+                if (!candidate) continue;
+                // Seller ID pattern: alphanumeric with hyphens/underscores, 3+ chars
+                if (/^[A-Za-z][A-Za-z0-9_\-]{2,}$/i.test(candidate)) {
+                    console.log(`[Meesho ID] Extracted seller ID (positional): "${candidate}"`);
+                    return candidate;
+                }
+            }
+        }
+    }
+    
+    console.log('[Meesho ID] Could not extract seller ID');
+    return 'UNKNOWN';
+}
+
+// ==================================================================
+// SKU EXTRACTION FUNCTIONS
+// ==================================================================
+
+/**
+ * Extract SKU and Qty from Meesho label text items.
+ * Pattern: "SKU" label above the SKU value, "Qty" label above the quantity in a table.
+ * Uses positional matching (X/Y coordinates) to find values below headers.
+ */
+function extractMeeshoSKU(textContentItems) {
+    const items = textContentItems;
+    const results = [];
+
+    // Helper to extract X,Y from transform
+    const getPosition = (item) => {
+        if (item.transform && item.transform.length >= 6) {
+            return { x: item.transform[4], y: item.transform[5] };
+        }
+        return { x: 0, y: 0 };
+    };
+
+    // Find SKU headers and their positions
+    const skuHeaders = [];
+    const qtyHeaders = [];
+
+    for (let i = 0; i < items.length; i++) {
+        const s = items[i].str.trim();
+        if (/^SKU$/i.test(s)) {
+            const pos = getPosition(items[i]);
+            skuHeaders.push({ idx: i, pos });
+            console.log(`[Meesho SKU] Found SKU header at index ${i}, position (${pos.x.toFixed(1)}, ${pos.y.toFixed(1)})`);
+        }
+        if (/^Qty$/i.test(s) || /^Quantity$/i.test(s)) {
+            qtyHeaders.push({ idx: i, pos: getPosition(items[i]) });
+        }
+    }
+
+    // For each SKU header, find ALL values directly below it (multiple rows)
+    for (const skuHeader of skuHeaders) {
+        const skuCandidates = []; // Array of { sku, yPos }
+
+        // Find all text items in the same column (similar X) but below (lower Y)
+        // In PDF coordinates, Y increases upward, so "below" means lower Y value
+        for (let j = 0; j < items.length; j++) {
+            if (j === skuHeader.idx) continue;
+            const candidate = items[j].str.trim();
+            if (!candidate || candidate.length < 3) continue; // Minimum 3 chars for SKU
+            
+            // Skip if it's another header or common label text
+            if (/^(SKU|Size|Qty|Color|Order|Price|Amount|Tax|HSN|Description|Product|Details|Name|Address|Phone|Mobile|City|State|Pin|Pincode|ZIP|Customer|Delivery|Ship|To|From)$/i.test(candidate)) continue;
+
+            const pos = getPosition(items[j]);
+            const xDiff = Math.abs(pos.x - skuHeader.pos.x);
+            const yDiff = skuHeader.pos.y - pos.y; // positive if below
+
+            // Item is in same column (small X difference) and below (positive Y diff)
+            // Reduced Y threshold from 300 to 120 to only capture product table, not address section
+            if (xDiff < 50 && yDiff > 0 && yDiff < 120) {
+                // SKU pattern: must contain BOTH letters AND numbers (mixed), with optional hyphens/underscores
+                if (/^[a-z0-9][a-z0-9_\-]{2,}$/i.test(candidate) && /[a-z]/i.test(candidate) && /[0-9]/.test(candidate)) {
+                    skuCandidates.push({ sku: candidate, yPos: pos.y });
+                    console.log(`[Meesho SKU] Found SKU candidate: "${candidate}" at Y: ${pos.y.toFixed(1)}`);
+                }
+            }
+        }
+
+        // For each SKU candidate, find its quantity value
+        // Quantity should be in the Qty column (different X) but same row (similar Y)
+        for (const skuCandidate of skuCandidates) {
+            let qtyValue = '1';
+            
+            for (const qtyHeader of qtyHeaders) {
+                let bestQtyCandidate = null;
+                let minYDiff = Infinity;
+
+                for (let j = 0; j < items.length; j++) {
+                    if (j === qtyHeader.idx) continue;
+                    const candidate = items[j].str.trim();
+                    if (!candidate || !/^\d+$/.test(candidate)) continue;
+
+                    const pos = getPosition(items[j]);
+                    const xDiff = Math.abs(pos.x - qtyHeader.pos.x);
+                    const yDiff = Math.abs(pos.y - skuCandidate.yPos); // same row = similar Y
+
+                    // Item is in Qty column (same X as header) and same row as SKU (similar Y)
+                    if (xDiff < 50 && yDiff < 10) {
+                        if (yDiff < minYDiff) {
+                            minYDiff = yDiff;
+                            bestQtyCandidate = candidate;
+                        }
+                    }
+                }
+
+                if (bestQtyCandidate) {
+                    qtyValue = bestQtyCandidate;
+                    break;
+                }
+            }
+
+            results.push({ sku: skuCandidate.sku, qty: qtyValue });
+        }
+    }
+
+    // Fallback: sequential search (original logic)
+    if (results.length === 0) {
+        for (let i = 0; i < items.length; i++) {
+            const s = items[i].str.trim();
+            if (/^SKU$/i.test(s)) {
+                for (let j = i + 1; j < Math.min(i + 10, items.length); j++) {
+                    const candidate = items[j].str.trim();
+                    if (!candidate) continue;
+                    if (/^(Qty|Quantity|HSN|Description|Size|Color|Price)$/i.test(candidate)) break;
+                    // SKU must contain BOTH letters AND numbers
+                    if (candidate.length >= 2 && /[a-z]/i.test(candidate) && /[0-9]/.test(candidate)) {
+                        const qtyMatch = items.slice(i, Math.min(i + 15, items.length))
+                            .map(it => it.str.trim())
+                            .find(str => /^\d+$/.test(str));
+                        results.push({
+                            sku: candidate,
+                            qty: qtyMatch || '1'
+                        });
+                        break;
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    // Last fallback: regex on joined text — SKU must contain both letters and numbers
+    if (results.length === 0) {
+        const fullText = items.map(i => i.str).join('\n');
+        const skuMatch = fullText.match(/SKU\s*\n\s*([a-z0-9_\-]+)/i);
+        const qtyMatch = fullText.match(/Qty\s*\n\s*(\d+)/i);
+        if (skuMatch && /[a-z]/i.test(skuMatch[1]) && /[0-9]/.test(skuMatch[1])) {
+            results.push({
+                sku: skuMatch[1].trim(),
+                qty: qtyMatch ? qtyMatch[1] : '1'
+            });
+        }
+    }
+
+    console.log(`[Meesho SKU] Extraction complete. Found ${results.length} SKU(s):`, results);
+    return results;
+}
+
+/**
+ * Extract SKU and Qty from Flipkart label text items.
+ * Header: "SKU ID | Description", Qty column: "QTY"
+ */
+function extractFlipkartSKU(textContentItems, pageHeight = 842) {
+    const items = textContentItems;
+    const results = [];
+    const fullText = items.map(i => i.str).join('\n');
+
+    // Define SKU extraction bounding box (user-provided coordinates from top)
+    // Convert from top coordinates to PDF bottom coordinates
+    const SKU_BOX = {
+        left: 191,
+        right: 402,
+        top: pageHeight - 279,    // y-279 from top
+        bottom: pageHeight - 331  // y-331 from top
+    };
+    
+    console.log(`[Flipkart SKU] Page height: ${pageHeight}, SKU box (PDF coords): left=${SKU_BOX.left}, right=${SKU_BOX.right}, bottom=${SKU_BOX.bottom.toFixed(1)}, top=${SKU_BOX.top.toFixed(1)}`);
+
+    // Helper to extract X,Y from transform
+    const getPosition = (item) => {
+        if (item.transform && item.transform.length >= 6) {
+            return { x: item.transform[4], y: item.transform[5] };
+        }
+        return { x: 0, y: 0 };
+    };
+    
+    // Helper to check if position is within SKU box
+    const isInSkuBox = (pos) => {
+        return pos.x >= SKU_BOX.left && pos.x <= SKU_BOX.right &&
+               pos.y >= SKU_BOX.bottom && pos.y <= SKU_BOX.top;
+    };
+
+    // Collect all text items within the SKU bounding box and log them
+    const boxItems = [];
+    for (let i = 0; i < items.length; i++) {
+        const s = items[i].str.trim();
+        if (!s) continue;
+        const pos = getPosition(items[i]);
+        if (!isInSkuBox(pos)) continue;
+        boxItems.push({ text: s, x: pos.x, y: pos.y, idx: i });
+        console.log(`[Flipkart SKU] Box item: "${s}" at (${pos.x.toFixed(1)}, ${pos.y.toFixed(1)})`);
+    }
+
+    // Group items into rows by Y position (items within 8pt are same row)
+    const rows = [];
+    const usedIndices = new Set();
+    for (const item of boxItems) {
+        if (usedIndices.has(item.idx)) continue;
+        const row = [item];
+        usedIndices.add(item.idx);
+        for (const other of boxItems) {
+            if (usedIndices.has(other.idx)) continue;
+            if (Math.abs(other.y - item.y) < 8) {
+                row.push(other);
+                usedIndices.add(other.idx);
+            }
+        }
+        // Sort items in row by X position (left to right)
+        row.sort((a, b) => a.x - b.x);
+        rows.push({ items: row, y: row[0].y, text: row.map(r => r.text).join(' ') });
+    }
+
+    // Sort rows by Y descending (top rows first in PDF coordinates)
+    rows.sort((a, b) => b.y - a.y);
+    console.log(`[Flipkart SKU] Found ${rows.length} rows in SKU box:`);
+    rows.forEach((r, i) => console.log(`  Row ${i}: "${r.text}" at Y=${r.y.toFixed(1)}`));
+
+    // Find header row (contains "SKU" keyword)
+    let headerRowIdx = -1;
+    for (let i = 0; i < rows.length; i++) {
+        if (/SKU/i.test(rows[i].text)) {
+            headerRowIdx = i;
+            console.log(`[Flipkart SKU] Header row found at index ${i}: "${rows[i].text}"`);
+            break;
+        }
+    }
+
+    // Process data rows below the header
+    if (headerRowIdx >= 0) {
+        for (let i = headerRowIdx + 1; i < rows.length; i++) {
+            const rowText = rows[i].text;
+            // Skip empty or header-like rows
+            if (/^(Total|Shipping|Amount|Invoice|Tax|IGST|CGST|SGST)/i.test(rowText)) continue;
+
+            let skuValue = null;
+            let qtyValue = '1';
+
+            // Method 1: Row text contains "|" — take text before it
+            if (rowText.includes('|')) {
+                const beforePipe = rowText.split('|')[0].trim();
+                // Remove leading row number like "1 " or "1."
+                const cleaned = beforePipe.replace(/^\d+[\s.]+/, '').trim();
+                if (cleaned.length >= 2) {
+                    skuValue = cleaned;
+                }
+            }
+
+            // Method 2: Look for "|" in individual items
+            if (!skuValue) {
+                for (const item of rows[i].items) {
+                    if (item.text.includes('|')) {
+                        const before = item.text.split('|')[0].trim();
+                        const cleaned = before.replace(/^\d+[\s.]+/, '').trim();
+                        if (cleaned.length >= 2) {
+                            skuValue = cleaned;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Method 3: If no "|" found, take the first alphanumeric token that looks like a SKU
+            if (!skuValue) {
+                for (const item of rows[i].items) {
+                    const t = item.text.replace(/^\d+[\s.]+/, '').trim();
+                    if (t.length >= 3 && /^[A-Za-z0-9][A-Za-z0-9_\-]{1,}$/.test(t)) {
+                        skuValue = t;
+                        break;
+                    }
+                }
+            }
+
+            // Find QTY: look for a standalone number in the row items (rightmost numeric item)
+            for (let k = rows[i].items.length - 1; k >= 0; k--) {
+                if (/^\d+$/.test(rows[i].items[k].text)) {
+                    qtyValue = rows[i].items[k].text;
+                    break;
+                }
+            }
+
+            if (skuValue) {
+                results.push({ sku: skuValue, qty: qtyValue });
+                console.log(`[Flipkart SKU] Extracted SKU: "${skuValue}", Qty: ${qtyValue}`);
+            }
+        }
+    }
+
+    // Fallback: search all box text for SKU pattern
+    if (results.length === 0) {
+        const allBoxText = boxItems.map(b => b.text).join(' ');
+        console.log(`[Flipkart SKU] Fallback: searching all box text: "${allBoxText}"`);
+        
+        // Try to find "text | description" pattern
+        const pipeMatch = allBoxText.match(/(?:^|\s)([A-Za-z0-9][A-Za-z0-9_\-]+)\s*\|/);
+        if (pipeMatch) {
+            const sku = pipeMatch[1].trim();
+            // Find qty nearby
+            const qtyMatch = allBoxText.match(/(\d+)\s*$/);
+            results.push({ sku: sku, qty: qtyMatch ? qtyMatch[1] : '1' });
+            console.log(`[Flipkart SKU] Fallback found SKU: "${sku}"`);
+        }
+    }
+    
+    // Last resort fallback: regex on entire page joined text
+    if (results.length === 0) {
+        const skuMatch = fullText.match(/SKU\s*ID\s*\|?\s*Description[^\n]*\n[^\n]*?([A-Za-z0-9][A-Za-z0-9_\-]+)\s*\|/i);
+        const qtyMatch = fullText.match(/QTY\s*\n\s*(\d+)/i);
+        if (skuMatch) {
+            results.push({
+                sku: skuMatch[1].trim(),
+                qty: qtyMatch ? qtyMatch[1] : '1'
+            });
+        }
+    }
+
+    console.log(`[Flipkart SKU] Extraction complete. Found ${results.length} SKU(s):`, results);
+    return results;
+}
+
+/**
+ * Extract SKU and Qty from Amazon invoice page text items.
+ * Pattern: "( sku_value )" followed by "HSN:" on next line.
+ * Qty is found in the table under "Qty" header.
+ */
+function extractAmazonSKU(textContentItems) {
+    const items = textContentItems;
+    const results = [];
+    const fullText = items.map(i => i.str).join('\n');
+
+    console.log('[Amazon SKU] Starting extraction...');
+
+    // Helper to extract position
+    const getPosition = (item) => {
+        if (item.transform && item.transform.length >= 6) {
+            return { x: item.transform[4], y: item.transform[5] };
+        }
+        return { x: 0, y: 0 };
+    };
+
+    // Group text items into rows by Y position (within 5pt = same row)
+    const rowMap = new Map();
+    for (let i = 0; i < items.length; i++) {
+        const s = items[i].str.trim();
+        if (!s) continue;
+        const pos = getPosition(items[i]);
+        const yKey = Math.round(pos.y / 5) * 5; // bucket by 5pt
+        if (!rowMap.has(yKey)) rowMap.set(yKey, []);
+        rowMap.set(yKey, [...rowMap.get(yKey), { text: s, x: pos.x, y: pos.y, idx: i }]);
+    }
+
+    // Build rows sorted by Y descending (top first in PDF coords)
+    const rows = [];
+    for (const [yKey, rowItems] of rowMap.entries()) {
+        rowItems.sort((a, b) => a.x - b.x);
+        const rowText = rowItems.map(r => r.text).join(' ');
+        rows.push({ items: rowItems, y: yKey, text: rowText });
+    }
+    rows.sort((a, b) => b.y - a.y);
+
+    // Method 1: Find rows containing "( sku )" followed by "HSN" — SKU must have NO spaces
+    for (const row of rows) {
+        const rowText = row.text;
+        // Match all bracket patterns where content has NO spaces
+        const bracketMatches = [...rowText.matchAll(/\(\s*(\S+)\s*\)/g)];
+        for (const match of bracketMatches) {
+            const candidate = match[1].trim();
+            // Verify HSN appears in same row or nearby text
+            if (/HSN/i.test(rowText) && candidate.length >= 2) {
+                const alreadyFound = results.some(r => r.sku === candidate);
+                if (!alreadyFound) {
+                    results.push({ sku: candidate, qty: '1' });
+                    console.log(`[Amazon SKU] Found SKU: "${candidate}" in row: "${rowText.substring(0, 80)}..."`);
+                }
+            }
+        }
+    }
+
+    // Method 2: If HSN is on next row, use previous row bracket content as SKU
+    for (let i = 0; i < rows.length - 1; i++) {
+        const rowText = rows[i].text;
+        const nextRowText = rows[i + 1].text;
+        if (!/HSN/i.test(nextRowText)) continue;
+
+        const bracketMatches = [...rowText.matchAll(/\(\s*(\S+)\s*\)/g)];
+        for (const match of bracketMatches) {
+            const candidate = match[1].trim();
+            if (candidate.length < 2) continue;
+            const alreadyFound = results.some(r => r.sku === candidate);
+            if (!alreadyFound) {
+                results.push({ sku: candidate, qty: '1' });
+                console.log(`[Amazon SKU] Found SKU from adjacent HSN row: "${candidate}"`);
+            }
+        }
+    }
+
+    // Extract quantities with layered strategy
+    const qtyValues = [];
+    const addQtyValue = (val, y = Number.NEGATIVE_INFINITY) => {
+        const normalized = String(val || '').trim();
+        if (!/^\d{1,3}$/.test(normalized)) return;
+        const numericVal = parseInt(normalized, 10);
+        if (numericVal <= 0 || numericVal > 500) return;
+        const exists = qtyValues.some(q => q.val === normalized && Math.abs((q.y || 0) - (y || 0)) < 2);
+        if (!exists) qtyValues.push({ val: normalized, y });
+    };
+
+    // Strategy A: parse invoice table rows under header row containing Description + Qty
+    const headerRow = rows.find(r => /Description/i.test(r.text) && /\bQty\b/i.test(r.text));
+    if (headerRow) {
+        const qtyHeaderItem = headerRow.items.find(it => /^Qty$/i.test(it.text) || /^Quantity$/i.test(it.text));
+        if (qtyHeaderItem) {
+            const qtyX = qtyHeaderItem.x;
+            for (const row of rows) {
+                if (row.y >= headerRow.y - 3) continue; // only rows below header
+                if (/^(TOTAL|Amount\s+in\s+Words|Tax\s+Amount|For\s+)/i.test(row.text)) break;
+
+                const numericItems = row.items.filter(it => /^\d{1,3}$/.test(it.text));
+                if (numericItems.length === 0) continue;
+
+                let best = null;
+                for (const numItem of numericItems) {
+                    const xDiff = Math.abs(numItem.x - qtyX);
+                    if (xDiff <= 45 && (!best || xDiff < best.xDiff)) {
+                        best = { value: numItem.text, xDiff };
+                    }
+                }
+
+                if (best) addQtyValue(best.value, row.y);
+            }
+        }
+    }
+
+    // Strategy B: positional fallback from Qty header token
+    const qtyHeaderItem = items.find(i => /^Qty$/i.test((i.str || '').trim()) || /^Quantity$/i.test((i.str || '').trim()));
+    if (qtyHeaderItem) {
+        const qtyHeaderPos = getPosition(qtyHeaderItem);
+        for (let i = 0; i < items.length; i++) {
+            const s = (items[i].str || '').trim();
+            if (!/^\d{1,3}$/.test(s)) continue;
+            const pos = getPosition(items[i]);
+            const xDiff = Math.abs(pos.x - qtyHeaderPos.x);
+            const yDiff = qtyHeaderPos.y - pos.y;
+            if (xDiff < 45 && yDiff > 5 && yDiff < 450) {
+                addQtyValue(s, pos.y);
+            }
+        }
+    }
+
+    // Strategy C: text fallback near Qty label
+    const qtyAfterHeader = fullText.match(/Qty\s*[\n\r:\-]*\s*(\d{1,3})\b/i);
+    if (qtyAfterHeader) {
+        addQtyValue(qtyAfterHeader[1]);
+    }
+
+    // Strategy D: table-line fallback near HSN value (common Amazon invoice format)
+    const qtyNearHsn = fullText.match(/HSN\s*:?\s*\d{4,}[\s\S]{0,80}?\b(\d{1,3})\b[\s\S]{0,30}?₹/i);
+    if (qtyNearHsn) {
+        addQtyValue(qtyNearHsn[1]);
+    }
+
+    qtyValues.sort((a, b) => b.y - a.y);
+
+    // Assign quantities to results (match by order)
+    for (let k = 0; k < results.length; k++) {
+        if (k < qtyValues.length) {
+            results[k].qty = qtyValues[k].val;
+        }
+    }
+
+    // Fallback: regex on full text — bracket content with NO spaces, followed by HSN
+    if (results.length === 0) {
+        const allMatches = [...fullText.matchAll(/\(\s*(\S+)\s*\)\s*[\n\s]*HSN/gi)];
+        for (const m of allMatches) {
+            const candidate = m[1].trim();
+            if (candidate.length >= 2) {
+                results.push({ sku: candidate, qty: '1' });
+                console.log(`[Amazon SKU] Fallback found SKU: "${candidate}"`);
+            }
+        }
+        // Try to get Qty
+        const qtyFallback = fullText.match(/Qty\s*\n?\s*(\d{1,3})/i);
+        if (qtyFallback && results.length > 0) {
+            results[0].qty = qtyFallback[1];
+        }
+    }
+
+    // If SKU was not extractable but quantity exists, keep quantity for multi-qty detection
+    if (results.length === 0 && qtyValues.length > 0) {
+        results.push({ sku: '', qty: qtyValues[0].val });
+        console.log(`[Amazon SKU] Quantity-only fallback: Qty ${qtyValues[0].val}`);
+    }
+
+    console.log(`[Amazon SKU] Extraction complete. Found ${results.length} SKU(s):`, results);
+    return results;
+}
+
+/**
+ * Extract order quantity directly from Amazon invoice page text.
+ * Returns a numeric quantity or null if not confidently detected.
+ */
+function extractAmazonInvoiceQuantity(textContentItems) {
+    if (!Array.isArray(textContentItems) || textContentItems.length === 0) {
+        return null;
+    }
+
+    const items = textContentItems
+        .map(item => {
+            const text = (item && item.str ? String(item.str).trim() : '');
+            const transform = item && item.transform ? item.transform : null;
+            return {
+                text,
+                x: transform && transform.length >= 6 ? transform[4] : 0,
+                y: transform && transform.length >= 6 ? transform[5] : 0,
+            };
+        })
+        .filter(item => item.text.length > 0);
+
+    const fullText = items.map(item => item.text).join('\n');
+    const compactText = fullText.replace(/\s+/g, ' ');
+    const candidates = [];
+
+    const addCandidate = (value, weight = 1) => {
+        const qty = parseInt(String(value || '').trim(), 10);
+        if (!Number.isFinite(qty) || qty < 1 || qty > 99) return;
+        candidates.push({ qty, weight });
+    };
+
+    const isQtyHeaderText = (text) => {
+        const normalized = String(text || '').replace(/[^a-z0-9]/gi, '').toLowerCase();
+        return normalized === 'qty' || normalized === 'quantity';
+    };
+
+    // Strategy 1: Qty column positional extraction from header token
+    const qtyHeaderItem = items.find(item => isQtyHeaderText(item.text));
+    if (qtyHeaderItem) {
+        for (const item of items) {
+            if (!/^\d{1,2}$/.test(item.text)) continue;
+            const xDiff = Math.abs(item.x - qtyHeaderItem.x);
+            const yDiff = qtyHeaderItem.y - item.y;
+            if (xDiff <= 70 && yDiff > 5 && yDiff < 500) {
+                addCandidate(item.text, 4);
+            }
+        }
+    }
+
+    // Strategy 2: Table row extraction (Description + Qty header row, then rows below)
+    const rowMap = new Map();
+    for (const item of items) {
+        const yKey = Math.round(item.y / 4) * 4;
+        if (!rowMap.has(yKey)) rowMap.set(yKey, []);
+        rowMap.get(yKey).push(item);
+    }
+
+    const rows = Array.from(rowMap.entries()).map(([yKey, rowItems]) => {
+        const sorted = [...rowItems].sort((a, b) => a.x - b.x);
+        return {
+            y: yKey,
+            items: sorted,
+            text: sorted.map(i => i.text).join(' ')
+        };
+    }).sort((a, b) => b.y - a.y);
+
+    const tableHeaderRow = rows.find(r => /description/i.test(r.text) && /(qty|quantity|q\s*ty)/i.test(r.text));
+    if (tableHeaderRow) {
+        const qtyHeaderInRow = tableHeaderRow.items.find(i => isQtyHeaderText(i.text));
+        const qtyX = qtyHeaderInRow ? qtyHeaderInRow.x : null;
+
+        for (const row of rows) {
+            if (row.y >= tableHeaderRow.y - 2) continue;
+            if (/^(TOTAL|Amount\s+in\s+Words|Tax\s+Amount|For\s+)/i.test(row.text)) break;
+
+            const integerTokens = row.items.filter(i => /^\d{1,2}$/.test(i.text));
+            if (integerTokens.length === 0) continue;
+
+            const hasAmountLikeToken = row.items.some(i => /₹|^\d+[\d,]*\.\d+$/.test(i.text));
+            if (!hasAmountLikeToken) continue;
+
+            if (qtyX !== null) {
+                let best = null;
+                for (const token of integerTokens) {
+                    const xDiff = Math.abs(token.x - qtyX);
+                    if (xDiff <= 70 && (!best || xDiff < best.xDiff)) {
+                        best = { qty: token.text, xDiff };
+                    }
+                }
+                if (best) addCandidate(best.qty, 5);
+            } else if (integerTokens.length === 1) {
+                addCandidate(integerTokens[0].text, 3);
+            }
+        }
+    }
+
+    // Strategy 3: Regex fallback where Qty is between Unit Price and Net Amount values
+    const betweenAmountsRegex = /(?:₹|rs\.?|inr)\s*\d[\d,]*(?:\.\d+)?\s+(\d{1,2})\s+(?:₹|rs\.?|inr)\s*\d[\d,]*(?:\.\d+)?/gi;
+    for (const match of compactText.matchAll(betweenAmountsRegex)) {
+        addCandidate(match[1], 6);
+    }
+
+    // Strategy 4: Direct Qty label regex fallback
+    const qtyRegex = /\bq\s*ty\b\s*[:\-]?\s*(\d{1,2})\b/gi;
+    for (const match of compactText.matchAll(qtyRegex)) {
+        addCandidate(match[1], 2);
+    }
+
+    if (candidates.length === 0) {
+        return null;
+    }
+
+    // Choose strongest candidate, preferring higher confidence and then larger qty when tied
+    candidates.sort((a, b) => (b.weight - a.weight) || (b.qty - a.qty));
+    const detectedQty = candidates[0].qty;
+    console.log(`[Amazon Qty] Detected quantity: ${detectedQty}`, candidates);
+    return detectedQty;
+}
+
+// Format SKU data as overlay string
+function formatSKUOverlay(skuData) {
+    if (!skuData || skuData.length === 0) return '';
+    return skuData.map(s => `SKU: ${s.sku} | Qty: ${s.qty}`).join('\n');
+}
+
+// ==================================================================
+// PDF LAYOUT TRANSFORMATION FUNCTIONS
+// ==================================================================
+
+/**
+ * MEESHO: No layout change. Scale to 4x6, overlay SKU at bottom.
+ */
+async function processMeeshoBucket(bucket) {
+    // Group by sellerId
+    const groups = {};
+    for (const item of bucket) {
+        const key = item.sellerId || 'UNKNOWN';
+        if (!groups[key]) groups[key] = [];
+        groups[key].push(item);
+    }
+
+    for (const [sellerId, items] of Object.entries(groups)) {
+        const outputPdf = await PDFLib.PDFDocument.create();
+        const helveticaBold = await outputPdf.embedFont(PDFLib.StandardFonts.HelveticaBold);
+        let labelNumber = 0;
+        let totalPages = 0;
+
+        for (const item of items) {
+            const srcPdf = await PDFLib.PDFDocument.load(item.data.slice(0));
+            const srcPdfjs = await pdfjsLib.getDocument({ data: item.data.slice(0) }).promise;
+
+            for (let p = 0; p < srcPdf.getPageCount(); p++) {
+                const srcPage = srcPdf.getPage(p);
+                const { width: srcW, height: srcH } = srcPage.getSize();
+
+                const page = await srcPdfjs.getPage(p + 1);
+                const tc = await page.getTextContent();
+                const textItems = (tc.items || []).filter(i => i && typeof i.str === 'string' && i.str.trim().length > 0);
+                const joinedText = textItems.map(i => i.str).join(' ');
+
+                // Case-sensitive anchor: process only pages containing exact "TAX INVOICE"
+                if (!joinedText.includes('TAX INVOICE')) {
+                    console.log(`[Meesho] Skipping page ${p + 1} of ${item.name} - TAX INVOICE not found (case-sensitive)`);
+                    continue;
+                }
+
+                // Find TAX INVOICE y-range in PDF coordinates
+                let taxTop = null;
+                let taxBottom = null;
+
+                // Direct item match first
+                for (const itemText of textItems) {
+                    const raw = String(itemText.str || '');
+                    if (raw.includes('TAX INVOICE')) {
+                        const y = itemText.transform ? itemText.transform[5] : 0;
+                        const h = itemText.height || (itemText.transform ? Math.abs(itemText.transform[3]) : 10) || 10;
+                        taxBottom = y;
+                        taxTop = y + h;
+                        break;
+                    }
+                }
+
+                // Row fallback if TAX and INVOICE are separate tokens
+                if (taxTop === null || taxBottom === null) {
+                    const rows = [];
+                    const rowTolerance = 2.5;
+                    for (const t of textItems) {
+                        const y = t.transform ? t.transform[5] : 0;
+                        let row = rows.find(r => Math.abs(r.y - y) <= rowTolerance);
+                        if (!row) {
+                            row = { y, items: [] };
+                            rows.push(row);
+                        }
+                        row.items.push(t);
+                    }
+
+                    for (const row of rows) {
+                        row.items.sort((a, b) => {
+                            const ax = a.transform ? a.transform[4] : 0;
+                            const bx = b.transform ? b.transform[4] : 0;
+                            return ax - bx;
+                        });
+                        const rowText = row.items.map(i => i.str).join(' ');
+                        if (rowText.includes('TAX INVOICE')) {
+                            let rowTop = -Infinity;
+                            let rowBottom = Infinity;
+                            for (const rt of row.items) {
+                                const y = rt.transform ? rt.transform[5] : 0;
+                                const h = rt.height || (rt.transform ? Math.abs(rt.transform[3]) : 10) || 10;
+                                rowTop = Math.max(rowTop, y + h);
+                                rowBottom = Math.min(rowBottom, y);
+                            }
+                            if (Number.isFinite(rowTop) && Number.isFinite(rowBottom)) {
+                                taxTop = rowTop;
+                                taxBottom = rowBottom;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (taxTop === null || taxBottom === null) {
+                    console.log(`[Meesho] Skipping page ${p + 1} of ${item.name} - TAX INVOICE anchor position not resolved`);
+                    continue;
+                }
+
+                // Determine invoice bottom by removing trailing white space to page bottom
+                let minContentBottom = srcH;
+                for (const t of textItems) {
+                    const y = t.transform ? t.transform[5] : 0;
+                    if (y < minContentBottom) minContentBottom = y;
+                }
+
+                // Crop bounds with small safety margins
+                const margin = 6;
+                const labelLeft = 0;
+                const labelRight = srcW;
+                const labelTop = srcH;
+                const labelBottom = Math.max(0, Math.min(srcH - 1, taxBottom - margin));
+
+                const invoiceLeft = 0;
+                const invoiceRight = srcW;
+                const invoiceTop = Math.min(srcH, Math.max(1, taxTop + margin));
+                const invoiceBottom = Math.max(0, Math.min(invoiceTop - 1, minContentBottom - margin));
+
+                const labelHeight = labelTop - labelBottom;
+                const invoiceHeight = invoiceTop - invoiceBottom;
+
+                if (labelHeight < 20 || invoiceHeight < 20) {
+                    console.log(`[Meesho] Skipping page ${p + 1} of ${item.name} - invalid crop heights (label=${labelHeight.toFixed(1)}, invoice=${invoiceHeight.toFixed(1)})`);
+                    continue;
+                }
+
+                labelNumber++;
+                const numText = `#${labelNumber}`;
+                const numFontSize = 14;
+
+                const embeddedLabel = await outputPdf.embedPage(srcPage, {
+                    left: labelLeft,
+                    bottom: labelBottom,
+                    right: labelRight,
+                    top: labelTop,
+                });
+
+                const embeddedInvoice = await outputPdf.embedPage(srcPage, {
+                    left: invoiceLeft,
+                    bottom: invoiceBottom,
+                    right: invoiceRight,
+                    top: invoiceTop,
+                });
+
+                // PAGE 1: LABEL (rotated 90°, full page fit)
+                const labelPage = outputPdf.addPage([288, 432]);
+                const labelWidth = labelRight - labelLeft;
+                const labelScaleW = 288 / labelHeight;
+                const labelScaleH = 432 / labelWidth;
+                const labelScale = Math.min(labelScaleW, labelScaleH);
+                const rotatedLabelVisualW = labelHeight * labelScale;
+                const rotatedLabelVisualH = labelWidth * labelScale;
+                const labelX = (288 - rotatedLabelVisualW) / 2 + rotatedLabelVisualW;
+                const labelY = (432 - rotatedLabelVisualH) / 2;
+
+                labelPage.drawPage(embeddedLabel, {
+                    x: labelX,
+                    y: labelY,
+                    width: labelWidth * labelScale,
+                    height: labelHeight * labelScale,
+                    rotate: PDFLib.degrees(90),
+                });
+
+                const labelNumWidth = helveticaBold.widthOfTextAtSize(numText, numFontSize);
+                const labelNumX = 288 - labelNumWidth - 5;
+                const labelNumY = 432 - numFontSize - 3;
+                const numPadX = 3;
+                const numPadY = 2;
+                labelPage.drawRectangle({
+                    x: Math.max(0, labelNumX - numPadX),
+                    y: Math.max(0, labelNumY - numPadY),
+                    width: Math.min(288, labelNumWidth + numPadX * 2),
+                    height: Math.min(432, numFontSize + numPadY * 2),
+                    color: PDFLib.rgb(1, 1, 1),
+                });
+                labelPage.drawText(numText, {
+                    x: labelNumX,
+                    y: labelNumY,
+                    size: numFontSize,
+                    font: helveticaBold,
+                    color: PDFLib.rgb(0, 0, 0),
+                });
+
+                // PAGE 2: INVOICE (rotated 90°, full page fit)
+                const invoicePage = outputPdf.addPage([288, 432]);
+                const invoiceWidth = invoiceRight - invoiceLeft;
+                const invScaleW = 288 / invoiceHeight;
+                const invScaleH = 432 / invoiceWidth;
+                const invScale = Math.min(invScaleW, invScaleH);
+                const rotatedInvVisualW = invoiceHeight * invScale;
+                const rotatedInvVisualH = invoiceWidth * invScale;
+                const invX = (288 - rotatedInvVisualW) / 2 + rotatedInvVisualW;
+                const invY = (432 - rotatedInvVisualH) / 2;
+
+                invoicePage.drawPage(embeddedInvoice, {
+                    x: invX,
+                    y: invY,
+                    width: invoiceWidth * invScale,
+                    height: invoiceHeight * invScale,
+                    rotate: PDFLib.degrees(90),
+                });
+
+                const invNumWidth = helveticaBold.widthOfTextAtSize(numText, numFontSize);
+                const invNumX = 288 - invNumWidth - 5;
+                const invNumY = 432 - numFontSize - 3;
+                invoicePage.drawRectangle({
+                    x: Math.max(0, invNumX - numPadX),
+                    y: Math.max(0, invNumY - numPadY),
+                    width: Math.min(288, invNumWidth + numPadX * 2),
+                    height: Math.min(432, numFontSize + numPadY * 2),
+                    color: PDFLib.rgb(1, 1, 1),
+                });
+                invoicePage.drawText(numText, {
+                    x: invNumX,
+                    y: invNumY,
+                    size: numFontSize,
+                    font: helveticaBold,
+                    color: PDFLib.rgb(0, 0, 0),
+                });
+
+                totalPages += 2;
+            }
+        }
+
+        const pdfBytes = await outputPdf.save();
+        const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+        const filename = `Meesho_${sellerId}_${labelNumber}.pdf`;
+        croppingResults.push({ filename, platform: 'meesho', blob, pageCount: labelNumber, sellerId });
+    }
+}
+
+/**
+ * FLIPKART: Separate label and invoice into different pages.
+ * Label page (top portion above dashed line) is tightly cropped without white spaces.
+ * Invoice page (bottom portion below dashed line) is scaled to fit.
+ */
+async function processFlipkartBucket(bucket) {
+    const groups = {};
+    for (const item of bucket) {
+        const key = item.sellerId || 'UNKNOWN';
+        if (!groups[key]) groups[key] = [];
+        groups[key].push(item);
+    }
+
+    for (const [sellerId, items] of Object.entries(groups)) {
+        const outputPdf = await PDFLib.PDFDocument.create();
+        const helveticaBold = await outputPdf.embedFont(PDFLib.StandardFonts.HelveticaBold);
+        let labelNumber = 0; // Sequential number for pairing label + invoice
+        let totalPages = 0;
+
+        for (const item of items) {
+            const srcPdf = await PDFLib.PDFDocument.load(item.data.slice(0));
+            const srcPdfjs = await pdfjsLib.getDocument({ data: item.data.slice(0) }).promise;
+
+            for (let p = 0; p < srcPdf.getPageCount(); p++) {
+                // Get page dimensions first
+                const srcPage = srcPdf.getPage(p);
+                const { width: srcW, height: srcH } = srcPage.getSize();
+                
+                // Extract text and SKU (with page height for coordinate conversion)
+                const page = await srcPdfjs.getPage(p + 1);
+                const tc = await page.getTextContent();
+                const skuData = extractFlipkartSKU(tc.items, srcH);
+
+                // Process only pages that look like actual label pages (must contain barcode-like content)
+                const hasBarcodeLikeContent = hasFlipkartBarcodeLikeContent(tc.items);
+                if (!hasBarcodeLikeContent) {
+                    console.log(`[Flipkart] Skipping page ${p + 1} of ${item.name} - no barcode-like content`);
+                    continue;
+                }
+
+                // Increment label number for this pair
+                labelNumber++;
+
+                // ============================================================
+                // EXACT CROP COORDINATES
+                // Label: x-187 to x-406, y-25 to y-383
+                // Invoice: x-29 to x-566, y-382 to y-800
+                // ============================================================
+                
+                const labelLeft = 187;
+                const labelRight = 406;
+                const labelBottom = srcH - 383;
+                const labelTop = srcH - 25;
+                
+                const invoiceLeft = 29;
+                const invoiceRight = 566;
+                const invoiceBottom = srcH - 800;
+                const invoiceTop = srcH - 382;
+                
+                const labelWidth = labelRight - labelLeft;   // 219 points
+                const labelHeight = labelTop - labelBottom;   // 358 points
+                const invoiceWidth = invoiceRight - invoiceLeft; // 537 points
+                const invoiceHeight = invoiceTop - invoiceBottom; // 418 points
+
+                // Embed cropped regions
+                const embeddedLabel = await outputPdf.embedPage(srcPage, {
+                    left: labelLeft, bottom: labelBottom, right: labelRight, top: labelTop,
+                });
+                const embeddedInvoice = await outputPdf.embedPage(srcPage, {
+                    left: invoiceLeft, bottom: invoiceBottom, right: invoiceRight, top: invoiceTop,
+                });
+
+                // ============================================================
+                // PAGE 1: LABEL (not rotated)
+                // ============================================================
+                const labelPage = outputPdf.addPage([288, 432]);
+
+                const labelScaleW = 288 / labelWidth;
+                const labelScaleH = 432 / labelHeight;
+                const labelScale = Math.min(labelScaleW, labelScaleH);
+
+                const labelDrawW = labelWidth * labelScale;
+                const labelDrawH = labelHeight * labelScale;
+
+                // Position: centered, using full page area
+                const labelX = (288 - labelDrawW) / 2;
+                const labelY = (432 - labelDrawH) / 2;
+
+                labelPage.drawPage(embeddedLabel, {
+                    x: labelX,
+                    y: labelY,
+                    width: labelDrawW,
+                    height: labelDrawH,
+                });
+
+                // Draw number at top-right of label page
+                const numText = `#${labelNumber}`;
+                const numFontSize = 14;
+                const numTextWidth = helveticaBold.widthOfTextAtSize(numText, numFontSize);
+                labelPage.drawText(numText, {
+                    x: 288 - numTextWidth - 5,
+                    y: 432 - numFontSize - 3,
+                    size: numFontSize,
+                    font: helveticaBold,
+                    color: PDFLib.rgb(0, 0, 0),
+                });
+
+                // ============================================================
+                // PAGE 2: INVOICE (rotated 90°)
+                // ============================================================
+                const invoicePage = outputPdf.addPage([288, 432]);
+
+                // After 90° rotation: visual width = invoiceHeight, visual height = invoiceWidth
+                const invScaleW = 288 / invoiceHeight;
+                const invScaleH = 432 / invoiceWidth;
+                const invScale = Math.min(invScaleW, invScaleH);
+
+                const rotatedInvVisualW = invoiceHeight * invScale;
+                const rotatedInvVisualH = invoiceWidth * invScale;
+
+                const invX = (288 - rotatedInvVisualW) / 2 + rotatedInvVisualW;
+                const invY = (432 - rotatedInvVisualH) / 2;
+
+                invoicePage.drawPage(embeddedInvoice, {
+                    x: invX,
+                    y: invY,
+                    width: invoiceWidth * invScale,
+                    height: invoiceHeight * invScale,
+                    rotate: PDFLib.degrees(90),
+                });
+
+                // Draw same number at top-right of invoice page
+                const invNumTextWidth = helveticaBold.widthOfTextAtSize(numText, numFontSize);
+                invoicePage.drawText(numText, {
+                    x: 288 - invNumTextWidth - 5,
+                    y: 432 - numFontSize - 3,
+                    size: numFontSize,
+                    font: helveticaBold,
+                    color: PDFLib.rgb(0, 0, 0),
+                });
+
+                totalPages += 2; // Label page + Invoice page
+            }
+        }
+
+        const pdfBytes = await outputPdf.save();
+        const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+        const filename = `Flipkart_${sellerId}_${labelNumber}.pdf`;
+        croppingResults.push({ filename, platform: 'flipkart', blob, pageCount: labelNumber, sellerId });
+    }
+}
+
+function hasFlipkartBarcodeLikeContent(textItems) {
+    if (!textItems || !textItems.length) return false;
+
+    const normalizedItems = textItems
+        .map(item => (item && item.str ? String(item.str).trim() : ''))
+        .filter(Boolean);
+
+    if (normalizedItems.length === 0) return false;
+
+    const joined = normalizedItems.join(' ').toUpperCase();
+    if (joined.includes('BARCODE')) return true;
+
+    // Common barcode text signatures found in PDF extracted text
+    const starWrappedPattern = /\*[A-Z0-9\-]{6,}\*/;
+    const compactCodePattern = /^[A-Z0-9\-]{10,}$/;
+    const longNumericPattern = /^\d{10,}$/;
+
+    for (const token of normalizedItems) {
+        const compact = token.replace(/\s+/g, '');
+        if (starWrappedPattern.test(compact)) return true;
+        if (compactCodePattern.test(compact) && /\d/.test(compact)) return true;
+        if (longNumericPattern.test(compact)) return true;
+    }
+
+    return false;
+}
+
+/**
+ * Scan PDF page canvas for 1D barcode using ZXing.
+ * Returns barcode text if found, null otherwise.
+ */
+/**
+ * Extract a region from canvas
+ */
+function extractCanvasRegion(sourceCanvas, x, y, width, height) {
+    const region = document.createElement('canvas');
+    region.width = width;
+    region.height = height;
+    const ctx = region.getContext('2d');
+    ctx.drawImage(sourceCanvas, x, y, width, height, 0, 0, width, height);
+    return region;
+}
+
+/**
+ * Enhance image contrast for better OCR
+ */
+function enhanceImageForBarcode(canvas) {
+    const enhanced = document.createElement('canvas');
+    enhanced.width = canvas.width;
+    enhanced.height = canvas.height;
+    const ctx = enhanced.getContext('2d');
+    
+    // Draw original
+    ctx.drawImage(canvas, 0, 0);
+    
+    // Get image data and enhance contrast
+    const imageData = ctx.getImageData(0, 0, enhanced.width, enhanced.height);
+    const data = imageData.data;
+    
+    // Apply contrast enhancement
+    const contrast = 1.5;
+    const factor = (259 * (contrast + 255)) / (255 * (259 - contrast));
+    
+    for (let i = 0; i < data.length; i += 4) {
+        data[i] = factor * (data[i] - 128) + 128;     // Red
+        data[i + 1] = factor * (data[i + 1] - 128) + 128; // Green
+        data[i + 2] = factor * (data[i + 2] - 128) + 128; // Blue
+        // Alpha stays the same
+    }
+    
+    ctx.putImageData(imageData, 0, 0);
+    return enhanced;
+}
+
+/**
+ * OCR scan of PDF page to extract AWB text (for image-based PDFs)
+ */
+async function ocrScanForAWB(pdfjsPage) {
+    try {
+        console.log('[OCR Scanner] Starting OCR for AWB extraction...');
+        
+        // Render page at high resolution for better OCR
+        const viewport = pdfjsPage.getViewport({ scale: 2.5 });
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d');
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+
+        await pdfjsPage.render({
+            canvasContext: context,
+            viewport: viewport
+        }).promise;
+
+        console.log(`[OCR Scanner] Rendered canvas: ${canvas.width}x${canvas.height}`);
+
+        // Apply preprocessing for better OCR
+        const enhancedCanvas = enhanceImageForBarcode(canvas);
+        
+        // Perform OCR on top 25% of page (where AWB typically is)
+        const topRegion = extractCanvasRegion(enhancedCanvas, 0, 0, enhancedCanvas.width, enhancedCanvas.height / 4);
+        
+        const { data: { text } } = await Tesseract.recognize(
+            topRegion.toDataURL('image/png'),
+            'eng',
+            {
+                logger: m => {
+                    if (m.status === 'recognizing text') {
+                        console.log(`[OCR Scanner] Progress: ${Math.round(m.progress * 100)}%`);
+                    }
+                }
+            }
+        );
+
+        console.log('[OCR Scanner] OCR complete, searching for AWB...');
+        console.log('[OCR Scanner] Extracted text:', text.substring(0, 200));
+
+        // Search for AWB pattern in OCR text
+        const awbMatch = text.match(/AWB\s*[:\s]*([0-9]{6,})/i);
+        if (awbMatch) {
+            console.log(`[OCR Scanner] Found AWB: ${awbMatch[1]}`);
+            return awbMatch[1];
+        }
+
+        // Try alternate patterns
+        const altMatch = text.match(/\b([0-9]{10,15})\b/);
+        if (altMatch) {
+            console.log(`[OCR Scanner] Found potential AWB number: ${altMatch[1]}`);
+            return altMatch[1];
+        }
+
+        console.log('[OCR Scanner] No AWB found in OCR text');
+    } catch (error) {
+        console.log('[OCR Scanner] OCR failed:', error.message);
+    }
+    
+    return null;
+}
+
+/**
+ * Extract AWB number from Amazon label page using OCR.
+ */
+async function extractAmazonAWB(pdfjsPage) {
+    if (!pdfjsPage) {
+        console.log('[Amazon AWB] No page provided');
+        return null;
+    }
+    
+    console.log('[Amazon AWB] Starting OCR scan for AWB...');
+    const ocrAWB = await ocrScanForAWB(pdfjsPage);
+    
+    if (ocrAWB) {
+        console.log(`[Amazon AWB] Found AWB from OCR: ${ocrAWB}`);
+        return ocrAWB;
+    }
+    
+    console.log('[Amazon AWB] No AWB found');
+    return null;
+}
+
+/**
+ * AMAZON: Portrait 4x6 layout with label (top) and invoice (bottom), both rotated 90°.
+ * SKU/AWB overlaid on invoice area.
+ */
+async function processAmazonBucket(bucket) {
+    const outputPdf = await PDFLib.PDFDocument.create();
+    const helveticaBold = await outputPdf.embedFont(PDFLib.StandardFonts.HelveticaBold);
+    let labelCount = 0;
+
+    for (const item of bucket) {
+        const srcPdf = await PDFLib.PDFDocument.load(item.data.slice(0));
+        const srcPdfjs = await pdfjsLib.getDocument({ data: item.data.slice(0) }).promise;
+        const numPages = srcPdf.getPageCount();
+
+        // Process in pairs: page 1+2, 3+4, etc.
+        for (let p = 0; p < numPages; p += 2) {
+            const labelPageIdx = p;
+            const invoicePageIdx = p + 1;
+
+            let skuData = [];
+            let invoiceDetectedQty = null;
+            let awbNumber = null;
+
+            // Extract AWB from label page (odd page) using OCR
+            const labelPage = await srcPdfjs.getPage(labelPageIdx + 1);
+            awbNumber = await extractAmazonAWB(labelPage);
+
+            // Extract SKU from invoice page (even page)
+            if (invoicePageIdx < numPages) {
+                const invPage = await srcPdfjs.getPage(invoicePageIdx + 1);
+                const tc = await invPage.getTextContent();
+                skuData = extractAmazonSKU(tc.items);
+                invoiceDetectedQty = extractAmazonInvoiceQuantity(tc.items);
+
+                // Ensure quantity is available even if SKU extraction is partial/empty
+                if (invoiceDetectedQty && skuData.length === 0) {
+                    skuData = [{ sku: '', qty: String(invoiceDetectedQty) }];
+                } else if (invoiceDetectedQty && skuData.length > 0) {
+                    const firstQty = parseInt(skuData[0].qty, 10);
+                    if (!Number.isFinite(firstQty) || firstQty < invoiceDetectedQty) {
+                        skuData[0].qty = String(invoiceDetectedQty);
+                    }
+                }
+            }
+
+            // Get label page dimensions
+            const labelSrcPage = srcPdf.getPage(labelPageIdx);
+            const { width: labelW, height: labelH } = labelSrcPage.getSize();
+            const embeddedLabel = await outputPdf.embedPage(labelSrcPage);
+
+            labelCount++;
+            const numText = `#${labelCount}`;
+            const numFontSize = 14;
+
+            // ============================================================
+            // LABEL OUTPUT PAGE: no crop, scaled to fit with reserved bottom info area
+            // ============================================================
+            const labelOutPage = outputPdf.addPage([288, 432]);
+            const infoSpace = 28; // reserved bottom space for SKU + AWB text
+            const labelAvailH = 432 - infoSpace;
+            const labelScale = Math.min(288 / labelW, labelAvailH / labelH);
+            const labelDrawW = labelW * labelScale;
+            const labelDrawH = labelH * labelScale;
+
+            labelOutPage.drawPage(embeddedLabel, {
+                x: (288 - labelDrawW) / 2,
+                y: infoSpace + (labelAvailH - labelDrawH) / 2,
+                width: labelDrawW,
+                height: labelDrawH,
+            });
+
+            // Number overlay on label page
+            const labelNumWidth = helveticaBold.widthOfTextAtSize(numText, numFontSize);
+            labelOutPage.drawText(numText, {
+                x: 288 - labelNumWidth - 5,
+                y: 432 - numFontSize - 3,
+                size: numFontSize,
+                font: helveticaBold,
+                color: PDFLib.rgb(0, 0, 0),
+            });
+
+            // Reserved bottom text: SKU/AWB or Multi Quantity Order marker (no overlay)
+            const hasMultiSku = (skuData || []).length >= 2;
+            const hasMultiQty =
+                (skuData || []).some(s => parseInt(s && s.qty, 10) > 1) ||
+                (Number.isFinite(invoiceDetectedQty) && invoiceDetectedQty > 1);
+            const isMultiQtyOrder = hasMultiSku || hasMultiQty;
+
+            const uniqueSkus = Array.from(new Set((skuData || []).map(s => s && s.sku).filter(Boolean)));
+            const skuText = isMultiQtyOrder
+                ? 'Multi Quantity Order'
+                : (uniqueSkus.length > 0 ? `SKU: ${uniqueSkus.join(', ')}` : '');
+            const awbText = awbNumber ? `AWB: ${awbNumber}` : '';
+            const infoText = [skuText, awbText].filter(Boolean).join(' | ');
+
+            if (infoText) {
+                labelOutPage.drawText(infoText, {
+                    x: 6,
+                    y: 8,
+                    size: 10,
+                    font: helveticaBold,
+                    color: PDFLib.rgb(0, 0, 0),
+                });
+            }
+
+            // ============================================================
+            // INVOICE OUTPUT PAGE: no crop, full-page fit, same number overlay
+            // ============================================================
+            if (invoicePageIdx < numPages) {
+                const invoiceSrcPage = srcPdf.getPage(invoicePageIdx);
+                const { width: invW, height: invH } = invoiceSrcPage.getSize();
+                const embeddedInvoice = await outputPdf.embedPage(invoiceSrcPage);
+                const invoiceOutPage = outputPdf.addPage([288, 432]);
+                const invScale = Math.min(288 / invW, 432 / invH);
+                const invDrawW = invW * invScale;
+                const invDrawH = invH * invScale;
+
+                invoiceOutPage.drawPage(embeddedInvoice, {
+                    x: (288 - invDrawW) / 2,
+                    y: (432 - invDrawH) / 2,
+                    width: invDrawW,
+                    height: invDrawH,
+                });
+
+                const invNumWidth = helveticaBold.widthOfTextAtSize(numText, numFontSize);
+                invoiceOutPage.drawText(numText, {
+                    x: 288 - invNumWidth - 5,
+                    y: 432 - numFontSize - 3,
+                    size: numFontSize,
+                    font: helveticaBold,
+                    color: PDFLib.rgb(0, 0, 0),
+                });
+            }
+        }
+    }
+
+    const pdfBytes = await outputPdf.save();
+    const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+    const filename = `Amazon_${labelCount}_labels.pdf`;
+    croppingResults.push({ filename, platform: 'amazon', blob, pageCount: labelCount, sellerId: 'Amazon' });
+}
+
+// ==================================================================
+// DISPLAY RESULTS
+// ==================================================================
+function displayCroppingResults() {
+    const el = getCroppingElements();
+
+    let totalProcessedPages = 0;
+    const platforms = new Set();
+    el.outputList.innerHTML = '';
+
+    for (const result of croppingResults) {
+        totalProcessedPages += result.pageCount;
+        platforms.add(result.platform);
+
+        const card = document.createElement('div');
+        card.className = `cropping-output-card platform-${result.platform}`;
+        card.innerHTML = `
+            <div class="output-info">
+                <span class="output-filename">📄 ${result.filename}</span>
+                <span class="output-details">${result.platform.charAt(0).toUpperCase() + result.platform.slice(1)} • ${result.pageCount} label(s) • Seller: ${result.sellerId}</span>
+            </div>
+            <button class="btn-download-single" data-idx="${croppingResults.indexOf(result)}">⬇️ Download</button>
+        `;
+        el.outputList.appendChild(card);
+    }
+
+    // Bind individual download buttons
+    el.outputList.querySelectorAll('.btn-download-single').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            const idx = parseInt(e.target.dataset.idx);
+            downloadSingleCropped(idx);
+        });
+    });
+
+    el.totalProcessed.textContent = totalProcessedPages;
+    el.platformCount.textContent = platforms.size;
+    el.resultsSection.style.display = 'block';
+}
+
+// ==================================================================
+// DOWNLOAD FUNCTIONS
+// ==================================================================
+function downloadSingleCropped(index) {
+    const result = croppingResults[index];
+    if (!result) return;
+    const url = URL.createObjectURL(result.blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = result.filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+async function downloadAllCropped() {
+    if (croppingResults.length === 0) {
+        alert('No processed PDFs to download.');
+        return;
+    }
+
+    for (let i = 0; i < croppingResults.length; i++) {
+        downloadSingleCropped(i);
+        // Small delay between downloads to avoid browser blocking
+        if (i < croppingResults.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+        }
+    }
+}
+
+// --- Initialize cropping tab on DOMContentLoaded ---
+document.addEventListener('DOMContentLoaded', () => {
+    initCroppingTab();
+});

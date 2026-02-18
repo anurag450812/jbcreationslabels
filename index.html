@@ -8,6 +8,7 @@
     <link rel="stylesheet" href="styles.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
 </head>
 <body>
     <div class="container">
@@ -20,6 +21,9 @@
                 </button>
                 <button class="tab-btn" data-tab="counter" onclick="switchTab('counter')">
                     🔢 Label Counter
+                </button>
+                <button class="tab-btn" data-tab="cropping" onclick="switchTab('cropping')">
+                    ✂️ Label Cropping
                 </button>
             </nav>
         </header>
@@ -73,7 +77,7 @@
                     <div class="stats">
                         <div class="stat-item">
                             <span class="stat-value" id="totalPages">0</span>
-                            <span class="stat-label">Total Pages</span>
+                            <span class="stat-label">Total Labels</span>
                         </div>
                         <div class="stat-item">
                             <span class="stat-value" id="matchedPages">0</span>
@@ -94,9 +98,14 @@
                         <div id="stockUpdateStatus" style="display: none;"></div>
                     </div>
 
-                    <button class="btn btn-success" id="downloadBtn">
-                        ⬇️ Download Sorted PDF
-                    </button>
+                    <div class="button-group">
+                        <button class="btn btn-success" id="downloadBtn">
+                            ⬇️ Download Sorted PDF
+                        </button>
+                        <button class="btn btn-secondary" id="updateStockBtn">
+                            📊 Update Stock to Google Sheets
+                        </button>
+                    </div>
                 </div>
             </section>
 
@@ -210,6 +219,82 @@
                 </section>
             </div>
             <!-- END COUNTER TAB CONTENT -->
+
+            <!-- CROPPING TAB CONTENT -->
+            <div id="cropping-tab-content" class="tab-content">
+                <section class="upload-section">
+                    <div class="upload-area" id="croppingUploadArea">
+                        <div class="upload-icon">✂️</div>
+                        <h2>Drop your PDF label files here</h2>
+                        <p>Upload shipping labels to crop &amp; format for thermal printing (4×6")</p>
+                        <input type="file" id="croppingFileInput" accept=".pdf" multiple>
+                    </div>
+                    <div class="button-group">
+                        <button class="btn btn-secondary" id="croppingClearBtn" style="display: none;">
+                            🗑️ Clear Files
+                        </button>
+                    </div>
+                </section>
+
+                <section class="cropping-files-info" id="croppingFilesInfo" style="display: none;">
+                    <h3>📁 Uploaded Files</h3>
+                    <div class="cropping-files-list" id="croppingFilesList"></div>
+                </section>
+
+                <section class="cropping-actions" id="croppingActions" style="display: none;">
+                    <h3>🖨️ Select Processing Mode</h3>
+                    <p>Choose a platform or let us detect automatically</p>
+                    <div class="cropping-btn-group">
+                        <button class="btn cropping-btn cropping-btn-auto" id="croppingAutoBtn">
+                            🔄 Automatic
+                        </button>
+                        <button class="btn cropping-btn cropping-btn-meesho" id="croppingMeeshoBtn">
+                            🛍️ Meesho
+                        </button>
+                        <button class="btn cropping-btn cropping-btn-flipkart" id="croppingFlipkartBtn">
+                            📦 Flipkart
+                        </button>
+                        <button class="btn cropping-btn cropping-btn-amazon" id="croppingAmazonBtn">
+                            🛒 Amazon
+                        </button>
+                    </div>
+                </section>
+
+                <section class="status-section" id="croppingStatusSection" style="display: none;">
+                    <div class="status-card">
+                        <h3>Processing Status</h3>
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="croppingProgressFill"></div>
+                        </div>
+                        <p id="croppingStatusText">Initializing...</p>
+                    </div>
+                </section>
+
+                <section class="cropping-results-section" id="croppingResultsSection" style="display: none;">
+                    <div class="results-card">
+                        <h3>📊 Cropping Results</h3>
+                        <div class="cropping-summary">
+                            <div class="stat-item">
+                                <span class="stat-value" id="croppingTotalProcessed">0</span>
+                                <span class="stat-label">Labels Processed</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-value" id="croppingPlatformCount">0</span>
+                                <span class="stat-label">Platforms Detected</span>
+                            </div>
+                        </div>
+
+                        <div class="cropping-output-list" id="croppingOutputList">
+                            <!-- Dynamic per-platform download cards -->
+                        </div>
+
+                        <button class="btn btn-success" id="croppingDownloadAllBtn">
+                            ⬇️ Download All Processed PDFs
+                        </button>
+                    </div>
+                </section>
+            </div>
+            <!-- END CROPPING TAB CONTENT -->
 
             <!-- Password Modal -->
             <div class="modal" id="passwordModal" style="display: none;">

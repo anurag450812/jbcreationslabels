@@ -1457,3 +1457,227 @@ footer {
         margin: 0;
     }
 }
+
+/* ============================================
+   LABEL CROPPING TAB STYLES
+   ============================================ */
+
+.cropping-actions {
+    background: white;
+    border-radius: 16px;
+    padding: 30px;
+    margin-bottom: 20px;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.08);
+    text-align: center;
+}
+
+.cropping-actions h3 {
+    margin-bottom: 8px;
+    color: var(--text-color);
+}
+
+.cropping-actions p {
+    color: #666;
+    margin-bottom: 20px;
+}
+
+.cropping-btn-group {
+    display: flex;
+    justify-content: center;
+    gap: 15px;
+    flex-wrap: wrap;
+}
+
+.cropping-btn {
+    padding: 16px 32px;
+    border-radius: 12px;
+    font-size: 1.05rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    border: 2px solid transparent;
+    min-width: 150px;
+    color: white;
+}
+
+.cropping-btn:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+}
+
+.cropping-btn:active {
+    transform: translateY(-1px);
+}
+
+.cropping-btn-auto {
+    background: linear-gradient(135deg, #43a047, #66bb6a);
+    border-color: #388e3c;
+}
+
+.cropping-btn-auto:hover {
+    background: linear-gradient(135deg, #388e3c, #43a047);
+}
+
+.cropping-btn-meesho {
+    background: linear-gradient(135deg, #880e4f, #c2185b);
+    border-color: #6a0036;
+}
+
+.cropping-btn-meesho:hover {
+    background: linear-gradient(135deg, #6a0036, #880e4f);
+}
+
+.cropping-btn-flipkart {
+    background: linear-gradient(135deg, #1565c0, #42a5f5);
+    border-color: #0d47a1;
+}
+
+.cropping-btn-flipkart:hover {
+    background: linear-gradient(135deg, #0d47a1, #1565c0);
+}
+
+.cropping-btn-amazon {
+    background: linear-gradient(135deg, #e65100, #ff9800);
+    border-color: #bf360c;
+}
+
+.cropping-btn-amazon:hover {
+    background: linear-gradient(135deg, #bf360c, #e65100);
+}
+
+.cropping-files-info {
+    background: white;
+    border-radius: 16px;
+    padding: 25px;
+    margin-bottom: 20px;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.08);
+}
+
+.cropping-files-info h3 {
+    margin-bottom: 15px;
+    color: var(--text-color);
+}
+
+.cropping-files-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.cropping-file-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 15px;
+    background: #f8f9fa;
+    border-radius: 8px;
+    font-size: 0.95rem;
+}
+
+.cropping-file-item .file-name {
+    font-weight: 600;
+    color: var(--text-color);
+}
+
+.cropping-file-item .file-pages {
+    color: #666;
+    font-size: 0.85rem;
+}
+
+.cropping-results-section {
+    margin-top: 20px;
+}
+
+.cropping-summary {
+    display: flex;
+    justify-content: center;
+    gap: 40px;
+    margin-bottom: 25px;
+}
+
+.cropping-output-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-bottom: 20px;
+}
+
+.cropping-output-card {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 15px 20px;
+    border-radius: 12px;
+    background: #f8f9fa;
+    border-left: 5px solid #ccc;
+}
+
+.cropping-output-card.platform-meesho {
+    border-left-color: #c2185b;
+}
+
+.cropping-output-card.platform-flipkart {
+    border-left-color: #1565c0;
+}
+
+.cropping-output-card.platform-amazon {
+    border-left-color: #e65100;
+}
+
+.cropping-output-card .output-info {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.cropping-output-card .output-filename {
+    font-weight: 700;
+    font-size: 1rem;
+    color: var(--text-color);
+}
+
+.cropping-output-card .output-details {
+    font-size: 0.85rem;
+    color: #666;
+}
+
+.cropping-output-card .btn-download-single {
+    padding: 8px 20px;
+    border-radius: 8px;
+    border: none;
+    background: var(--primary-color);
+    color: white;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-size: 0.9rem;
+}
+
+.cropping-output-card .btn-download-single:hover {
+    background: #5a52d5;
+    transform: translateY(-1px);
+}
+
+@media (max-width: 768px) {
+    .cropping-btn-group {
+        flex-direction: column;
+        align-items: center;
+    }
+
+    .cropping-btn {
+        width: 100%;
+        max-width: 280px;
+    }
+
+    .cropping-summary {
+        flex-direction: column;
+        gap: 15px;
+        align-items: center;
+    }
+
+    .cropping-output-card {
+        flex-direction: column;
+        gap: 12px;
+        text-align: center;
+    }
+}
