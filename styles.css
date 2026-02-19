@@ -935,6 +935,127 @@ footer {
     animation: fadeIn 0.3s ease;
 }
 
+/* Label Finder */
+.finder-search-section,
+.finder-history-section,
+.finder-results-section,
+.finder-preview-section {
+    margin-bottom: 20px;
+}
+
+.finder-search-row {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+}
+
+.finder-print-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-primary);
+    font-size: 0.9rem;
+    white-space: nowrap;
+}
+
+.finder-main-layout {
+    display: block;
+}
+
+.finder-sidebar {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+#finderSearchInput {
+    flex: 1;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-size: 1rem;
+    background: var(--card-bg);
+    color: var(--text-primary);
+}
+
+.finder-history-list,
+.finder-results-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.finder-history-item,
+.finder-result-item {
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 10px 12px;
+    background: var(--card-bg);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+}
+
+.finder-item-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.finder-history-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.finder-item-title {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.finder-item-subtitle {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.finder-preview-grid {
+    margin-top: 12px;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 14px;
+}
+
+.finder-preview-item {
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 14px;
+    background: var(--card-bg);
+    max-width: 520px;
+}
+
+.finder-preview-item h4 {
+    margin-bottom: 8px;
+    color: var(--text-primary);
+}
+
+.finder-preview-item canvas {
+    width: 100%;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: #fff;
+}
+
+.finder-warning {
+    margin-top: 8px;
+    color: var(--warning-color);
+    font-size: 0.85rem;
+}
+
+.finder-selected-meta {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+}
+
 @keyframes fadeIn {
     from {
         opacity: 0;
@@ -1301,6 +1422,27 @@ footer {
     .tab-nav {
         flex-direction: column;
         gap: 10px;
+    }
+
+    .finder-search-row {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .finder-main-layout {
+        display: block;
+    }
+
+    .finder-sidebar {
+        order: 1;
+    }
+
+    .finder-preview-section {
+        order: 2;
+    }
+
+    .finder-preview-grid {
+        grid-template-columns: 1fr;
     }
     
     .tab-btn {

@@ -230,10 +230,29 @@ let uploadedFiles = [];
 let processedPDF = null;
 let labelOccurrences = {}; // Store label counts globally for use during download
 let pendingPasswordAction = null; // Track which action requires password ('editLabels' or 'googleSheets')
+let pendingFinderDeleteEntryId = null;
 let stockAlreadyDeducted = false; // Prevent duplicate stock deductions on multiple download clicks
+let finderCapturedForBatch = false; // Track finder capture state for current processed batch
+let currentProcessedBatchToken = '';
+let lastFinderCapturedBatchToken = '';
+let latestSortedPdfName = '';
 
 // Label Counter specific variables
 let counterUploadedFiles = [];
+
+// Label Finder state
+const LABEL_FINDER_DB = 'jb-label-finder-db';
+const LABEL_FINDER_STORE = 'finderEntries';
+const LABEL_FINDER_LIMIT = 10;
+const LABEL_FINDER_CACHE = 'finder-pdf-cache-v1';
+const FINDER_CAN_USE_CACHE_API = false;
+let finderEntries = [];
+let finderPdfCache = new Map();
+let finderIndex = [];
+let finderCurrentSelection = null;
+let finderSearchDebounceTimer = null;
+let finderPrintFrame = null;
+let finderPrintUrlToRevoke = null;
 
 // Tab switching function
 function switchTab(tabName) {
@@ -256,6 +275,10 @@ function switchTab(tabName) {
             content.classList.remove('active');
         }
     });
+
+    if (document.body) {
+        document.body.classList.toggle('finder-tab-active', tabName === 'finder');
+    }
     
     // Save active tab to localStorage
     localStorage.setItem('activeTab', tabName);
@@ -318,6 +341,16 @@ const saveCriteriaBtn = document.getElementById('saveCriteriaBtn');
 const cancelCriteriaBtn = document.getElementById('cancelCriteriaBtn');
 const resetCriteriaBtn = document.getElementById('resetCriteriaBtn');
 
+// Label Finder DOM Elements
+const finderSearchInput = document.getElementById('finderSearchInput');
+const finderPrintBtn = document.getElementById('finderPrintBtn');
+const finderIncludeInvoiceToggle = document.getElementById('finderIncludeInvoiceToggle');
+const finderSearchHelp = document.getElementById('finderSearchHelp');
+const finderHistoryList = document.getElementById('finderHistoryList');
+const finderResultsList = document.getElementById('finderResultsList');
+const finderSelectedMeta = document.getElementById('finderSelectedMeta');
+const finderLabelCanvas = document.getElementById('finderLabelCanvas');
+
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
     initializeApp();
@@ -332,7 +365,7 @@ function initializeApp() {
     
     // Restore active tab from localStorage
     const savedTab = localStorage.getItem('activeTab');
-    if (savedTab && (savedTab === 'sorting' || savedTab === 'counter' || savedTab === 'cropping')) {
+    if (savedTab && (savedTab === 'sorting' || savedTab === 'counter' || savedTab === 'cropping' || savedTab === 'finder')) {
         switchTab(savedTab);
     }
     
@@ -341,6 +374,9 @@ function initializeApp() {
     
     // Load app configuration from cloud (async, will update settings when loaded)
     loadAppConfigFromCloud();
+
+    // Initialize label finder state
+    initializeLabelFinder();
 }
 
 function displayPriorityList() {
@@ -647,6 +683,16 @@ function setupEventListeners() {
     
     // Copy results button
     copyCounterResultsBtn.addEventListener('click', copyCounterResults);
+
+    // Label finder
+    if (finderSearchInput) {
+        finderSearchInput.addEventListener('input', handleFinderSearchInput);
+    }
+    if (finderPrintBtn) {
+        finderPrintBtn.addEventListener('click', printFinderSelection);
+    }
+
+    document.addEventListener('keydown', handleFinderGlobalKeydown);
 }
 
 // ===============================
@@ -1697,6 +1743,8 @@ function clearFiles() {
     
     // Reset stock deduction flag for new batch
     stockAlreadyDeducted = false;
+    finderCapturedForBatch = false;
+    currentProcessedBatchToken = '';
     labelOccurrences = {};
     
     // Reset upload area text
@@ -1822,11 +1870,14 @@ async function processLabels() {
         
         // Reset stock deduction flag for this new processing batch
         stockAlreadyDeducted = false;
+        finderCapturedForBatch = false;
+        currentProcessedBatchToken = `batch_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
         
         updateProgress(80, 'Creating sorted PDF...');
         
         // Create new PDF with sorted pages
         processedPDF = await createSortedPDF(outputPages, uploadedFiles);
+        latestSortedPdfName = `sorted_labels_${new Date().getTime()}.pdf`;
         
         updateProgress(100, 'Complete!');
         
@@ -2456,6 +2507,10 @@ function showPasswordModal(action) {
             messageEl.textContent = 'Enter password to edit priority labels';
         } else if (action === 'googleSheets') {
             messageEl.textContent = 'Enter password to configure Google Sheets';
+        } else if (action === 'labelCriteria') {
+            messageEl.textContent = 'Enter password to configure label detection settings';
+        } else if (action === 'finderDelete') {
+            messageEl.textContent = 'Enter password to delete this history file';
         }
     }
     
@@ -2468,7 +2523,7 @@ function hidePasswordModal() {
     passwordError.style.display = 'none';
 }
 
-function checkPassword() {
+async function checkPassword() {
     const enteredPassword = passwordInput.value;
     
     if (enteredPassword === EDIT_PASSWORD) {
@@ -2480,6 +2535,8 @@ function checkPassword() {
             showGoogleSheetsModal();
         } else if (pendingPasswordAction === 'labelCriteria') {
             showLabelCriteriaModal();
+        } else if (pendingPasswordAction === 'finderDelete') {
+            await confirmFinderHistoryDelete();
         }
         pendingPasswordAction = null;
     } else {
@@ -2783,7 +2840,16 @@ async function updateStockToGoogleSheets() {
         return;
     }
 
+    const canCaptureForCurrentBatch = Boolean(currentProcessedBatchToken) && lastFinderCapturedBatchToken !== currentProcessedBatchToken;
+
     if (stockAlreadyDeducted) {
+        if (!finderCapturedForBatch && canCaptureForCurrentBatch) {
+            const recovered = await captureFinderEntryFromCurrentBatch();
+            finderCapturedForBatch = recovered;
+            if (recovered) {
+                lastFinderCapturedBatchToken = currentProcessedBatchToken;
+            }
+        }
         if (stockUpdateStatus) {
             stockUpdateStatus.innerHTML = '<span class="status-success">✅ Stock already updated for this batch</span>';
             stockUpdateStatus.style.display = 'block';
@@ -2794,8 +2860,734 @@ async function updateStockToGoogleSheets() {
     const result = await deductStockFromGoogleSheets(labelOccurrences);
     if (result.success) {
         stockAlreadyDeducted = true;
+        if (canCaptureForCurrentBatch) {
+            finderCapturedForBatch = await captureFinderEntryFromCurrentBatch();
+            if (finderCapturedForBatch) {
+                lastFinderCapturedBatchToken = currentProcessedBatchToken;
+            }
+        }
     }
 }
+
+function formatFinderTimestamp(dateInput) {
+    const date = dateInput instanceof Date ? dateInput : new Date(dateInput);
+    return date.toLocaleString('en-IN', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true
+    });
+}
+
+function normalizeFinderText(text) {
+    return String(text || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+function getFinderEntryMeta(entry) {
+    return {
+        id: entry.id,
+        fileName: entry.fileName,
+        createdAt: entry.createdAt,
+        createdAtDisplay: entry.createdAtDisplay,
+        pageCount: entry.pageCount || 0,
+        trackingCount: Array.isArray(entry.trackings) ? entry.trackings.length : 0,
+        trackings: Array.isArray(entry.trackings) ? entry.trackings : []
+    };
+}
+
+function openFinderDb() {
+    return new Promise((resolve, reject) => {
+        const request = indexedDB.open(LABEL_FINDER_DB, 1);
+
+        request.onupgradeneeded = (event) => {
+            const db = event.target.result;
+            if (!db.objectStoreNames.contains(LABEL_FINDER_STORE)) {
+                db.createObjectStore(LABEL_FINDER_STORE, { keyPath: 'id' });
+            }
+        };
+
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error || new Error('Failed to open finder DB'));
+    });
+}
+
+function idbRequestToPromise(request) {
+    return new Promise((resolve, reject) => {
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error || new Error('IndexedDB request failed'));
+    });
+}
+
+function isFinderQuotaError(error) {
+    const errorText = String((error && error.message) || error || '').toLowerCase();
+    return (error && error.name === 'QuotaExceededError') || errorText.includes('quota') || errorText.includes('space');
+}
+
+function getFinderPdfCacheKey(entryId) {
+    return `${window.location.origin}/__finder_pdf__/${encodeURIComponent(entryId)}.pdf`;
+}
+
+async function putFinderPdfInCache(entryId, pdfBlob) {
+    if (!FINDER_CAN_USE_CACHE_API) return;
+    const cache = await caches.open(LABEL_FINDER_CACHE);
+    await cache.put(
+        getFinderPdfCacheKey(entryId),
+        new Response(pdfBlob, {
+            headers: {
+                'Content-Type': 'application/pdf'
+            }
+        })
+    );
+}
+
+async function getFinderPdfFromCache(entryId) {
+    if (!FINDER_CAN_USE_CACHE_API) return null;
+    const cache = await caches.open(LABEL_FINDER_CACHE);
+    const response = await cache.match(getFinderPdfCacheKey(entryId));
+    if (!response) return null;
+    return await response.blob();
+}
+
+async function deleteFinderPdfFromCache(entryId) {
+    if (!FINDER_CAN_USE_CACHE_API) return;
+    const cache = await caches.open(LABEL_FINDER_CACHE);
+    await cache.delete(getFinderPdfCacheKey(entryId));
+}
+
+async function saveFinderEntryAndPdfWithEviction(entry, pdfBlob) {
+    let lastError = null;
+
+    for (let attempt = 0; attempt <= LABEL_FINDER_LIMIT; attempt++) {
+        try {
+            if (FINDER_CAN_USE_CACHE_API) {
+                await putFinderPdfInCache(entry.id, pdfBlob);
+                await saveFinderEntryWithEviction(entry);
+            } else {
+                await saveFinderEntryWithEviction({ ...entry, pdfBlob });
+            }
+            return;
+        } catch (error) {
+            lastError = error;
+            if (!isFinderQuotaError(error)) {
+                throw error;
+            }
+
+            const existing = await getAllFinderEntries();
+            if (!existing.length) {
+                throw error;
+            }
+
+            const oldest = existing
+                .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))[0];
+
+            if (!oldest || !oldest.id) {
+                throw error;
+            }
+
+            await deleteFinderEntry(oldest.id);
+            finderPdfCache.delete(oldest.id);
+        }
+    }
+
+    throw lastError || new Error('Unable to save finder entry and PDF');
+}
+
+async function saveFinderEntry(entry) {
+    const db = await openFinderDb();
+    try {
+        const tx = db.transaction(LABEL_FINDER_STORE, 'readwrite');
+        const store = tx.objectStore(LABEL_FINDER_STORE);
+        await idbRequestToPromise(store.put(entry));
+        await new Promise((resolve, reject) => {
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error || new Error('Failed saving finder entry'));
+            tx.onabort = () => reject(tx.error || new Error('Finder entry save aborted'));
+        });
+    } finally {
+        db.close();
+    }
+}
+
+async function saveFinderEntryWithEviction(entry) {
+    let lastError = null;
+
+    for (let attempt = 0; attempt <= LABEL_FINDER_LIMIT; attempt++) {
+        try {
+            await saveFinderEntry(entry);
+            return;
+        } catch (error) {
+            lastError = error;
+            const isQuotaIssue = isFinderQuotaError(error);
+
+            if (!isQuotaIssue) {
+                throw error;
+            }
+
+            const existing = await getAllFinderEntries();
+            if (!existing.length) {
+                throw error;
+            }
+
+            const oldest = existing
+                .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))[0];
+
+            if (!oldest || !oldest.id) {
+                throw error;
+            }
+
+            await deleteFinderEntry(oldest.id);
+            finderPdfCache.delete(oldest.id);
+        }
+    }
+
+    throw lastError || new Error('Unable to save finder entry');
+}
+
+async function getAllFinderEntries() {
+    const db = await openFinderDb();
+    try {
+        const tx = db.transaction(LABEL_FINDER_STORE, 'readonly');
+        const store = tx.objectStore(LABEL_FINDER_STORE);
+        const result = await idbRequestToPromise(store.getAll());
+        return Array.isArray(result) ? result : [];
+    } finally {
+        db.close();
+    }
+}
+
+async function deleteFinderEntry(entryId) {
+    await deleteFinderPdfFromCache(entryId);
+    const db = await openFinderDb();
+    try {
+        const tx = db.transaction(LABEL_FINDER_STORE, 'readwrite');
+        const store = tx.objectStore(LABEL_FINDER_STORE);
+        await idbRequestToPromise(store.delete(entryId));
+        await new Promise((resolve, reject) => {
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error || new Error('Failed deleting finder entry'));
+            tx.onabort = () => reject(tx.error || new Error('Finder entry delete aborted'));
+        });
+    } finally {
+        db.close();
+    }
+}
+
+async function refreshFinderFromStorage() {
+    const entries = await getAllFinderEntries();
+    const sortedEntries = entries.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+    finderPdfCache.clear();
+    finderEntries = sortedEntries.map(entry => {
+        if (entry.pdfBlob) {
+            finderPdfCache.set(entry.id, entry.pdfBlob);
+        }
+        return getFinderEntryMeta(entry);
+    });
+
+    buildFinderIndex();
+    renderFinderHistory();
+}
+
+async function confirmFinderHistoryDelete() {
+    if (!pendingFinderDeleteEntryId) return;
+
+    const entryId = pendingFinderDeleteEntryId;
+    pendingFinderDeleteEntryId = null;
+
+    await deleteFinderEntry(entryId);
+    await refreshFinderFromStorage();
+
+    if (finderCurrentSelection && finderCurrentSelection.entryId === entryId) {
+        resetFinderSearchStateAfterPrint();
+    }
+}
+
+function buildFinderIndex() {
+    finderIndex = [];
+
+    finderEntries.forEach(entry => {
+        const timestampMs = new Date(entry.createdAt).getTime();
+        entry.trackings.forEach(trackingInfo => {
+            const normalized = normalizeFinderText(trackingInfo.tracking);
+            if (!normalized) return;
+
+            finderIndex.push({
+                entryId: entry.id,
+                fileName: entry.fileName,
+                createdAt: entry.createdAt,
+                createdAtDisplay: entry.createdAtDisplay,
+                timestampMs,
+                tracking: trackingInfo.tracking,
+                trackingNormalized: normalized,
+                labelPageIndex: trackingInfo.labelPageIndex,
+                invoicePageIndex: typeof trackingInfo.invoicePageIndex === 'number' ? trackingInfo.invoicePageIndex : null
+            });
+        });
+    });
+
+    finderIndex.sort((a, b) => b.timestampMs - a.timestampMs);
+}
+
+function renderFinderHistory() {
+    if (!finderHistoryList) return;
+
+    if (finderEntries.length === 0) {
+        finderHistoryList.innerHTML = '';
+        return;
+    }
+
+    finderHistoryList.innerHTML = finderEntries
+        .map(entry => `
+            <div class="finder-history-item">
+                <div class="finder-item-meta">
+                    <div class="finder-item-title">${entry.fileName}</div>
+                    <div class="finder-item-subtitle">${entry.createdAtDisplay} · ${entry.pageCount} pages · ${entry.trackingCount} tracking numbers</div>
+                </div>
+                <div class="finder-history-actions">
+                    <button class="btn btn-secondary" onclick="openFinderEntry('${entry.id}')">Open</button>
+                    <button class="btn btn-secondary" onclick="requestFinderHistoryDelete('${entry.id}')">Delete</button>
+                </div>
+            </div>
+        `)
+        .join('');
+}
+
+function renderFinderResults(matches, query) {
+    if (!finderResultsList) return;
+
+    if (!query || query.length < 4) {
+        finderResultsList.innerHTML = '';
+        return;
+    }
+
+    if (!matches.length) {
+        finderResultsList.innerHTML = '';
+        return;
+    }
+
+    finderResultsList.innerHTML = matches
+        .map((match, index) => `
+            <div class="finder-result-item">
+                <div class="finder-item-meta">
+                    <div class="finder-item-title">${match.tracking}</div>
+                    <div class="finder-item-subtitle">${match.fileName} · ${match.createdAtDisplay}</div>
+                </div>
+                <button class="btn btn-secondary" onclick="openFinderMatch(${index})">Open</button>
+            </div>
+        `)
+        .join('');
+}
+
+async function initializeLabelFinder() {
+    if (!finderHistoryList) return;
+
+    try {
+        await refreshFinderFromStorage();
+        renderFinderResults([], '');
+    } catch (error) {
+        console.error('Failed to initialize label finder:', error);
+        if (finderSearchHelp) {
+            finderSearchHelp.textContent = '';
+        }
+    }
+}
+
+function extractTrackingCandidates(pageText) {
+    const text = String(pageText || '');
+    const regexes = [
+        /\b\d{12,18}\b/g,
+        /\b[A-Z]{2}\d{10,16}[A-Z]{0,6}\b/g,
+        /\b[A-Z]{3,8}\d{7,14}[A-Z]{0,6}\b/g,
+        /\b\d{8,14}[A-Z]{2,6}\b/g
+    ];
+
+    const candidates = new Set();
+    const normalizedText = text.toUpperCase();
+
+    regexes.forEach(regex => {
+        const matches = normalizedText.match(regex) || [];
+        matches.forEach(match => {
+            const cleaned = normalizeFinderText(match);
+            if (cleaned.length >= 10 && cleaned.length <= 24) {
+                candidates.add(cleaned);
+            }
+        });
+    });
+
+    return Array.from(candidates);
+}
+
+async function extractTrackingsFromSortedPdf(pdfBytes) {
+    const pdfDoc = await pdfjsLib.getDocument({ data: pdfBytes.slice(0) }).promise;
+    const pageCount = pdfDoc.numPages;
+    const trackingRecords = [];
+    const seen = new Set();
+
+    for (let pageNumber = 1; pageNumber <= pageCount; pageNumber++) {
+        const page = await pdfDoc.getPage(pageNumber);
+        const textContent = await page.getTextContent();
+        const pageText = textContent.items.map(item => item.str || '').join(' ');
+        const hasLabelSignal = hasBarcodeLikeTextForSorter(String(pageText || '').toLowerCase()) || /AWB|TRACKING|SHIP(?:PING)?|PICKUP|DELIVERY|RETURN\s+TO/i.test(pageText);
+        if (!hasLabelSignal) continue;
+
+        const candidates = extractTrackingCandidates(pageText);
+        const labelPageIndex = pageNumber - 1;
+        const invoicePageIndex = pageNumber < pageCount ? pageNumber : null;
+
+        candidates.forEach(tracking => {
+            const key = `${tracking}::${labelPageIndex}`;
+            if (seen.has(key)) return;
+            seen.add(key);
+            trackingRecords.push({ tracking, labelPageIndex, invoicePageIndex });
+        });
+    }
+
+    return { pageCount, trackingRecords };
+}
+
+async function captureFinderEntryFromCurrentBatch() {
+    if (!processedPDF) return false;
+
+    try {
+        const pdfBytes = await processedPDF.save();
+        const pdfBlob = new Blob([pdfBytes], { type: 'application/pdf' });
+        const { pageCount, trackingRecords } = await extractTrackingsFromSortedPdf(pdfBytes);
+
+        const createdAt = new Date().toISOString();
+        const entry = {
+            id: `finder_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+            createdAt,
+            createdAtDisplay: formatFinderTimestamp(createdAt),
+            fileName: latestSortedPdfName || `sorted_labels_${Date.now()}.pdf`,
+            pageCount,
+            trackings: trackingRecords
+        };
+
+        await saveFinderEntryAndPdfWithEviction(entry, pdfBlob);
+
+        // Reload to keep state consistent with DB and enforce retention
+        const entries = await getAllFinderEntries();
+        const sorted = entries.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        const keep = sorted.slice(0, LABEL_FINDER_LIMIT);
+        const remove = sorted.slice(LABEL_FINDER_LIMIT);
+
+        for (const oldEntry of remove) {
+            await deleteFinderEntry(oldEntry.id);
+            finderPdfCache.delete(oldEntry.id);
+        }
+
+        finderPdfCache.clear();
+        finderEntries = keep.map(item => {
+            if (item.pdfBlob) {
+                finderPdfCache.set(item.id, item.pdfBlob);
+            }
+            return getFinderEntryMeta(item);
+        });
+
+        buildFinderIndex();
+        renderFinderHistory();
+
+        if (finderSearchHelp) {
+            finderSearchHelp.textContent = '';
+        }
+        return true;
+    } catch (error) {
+        console.error('Failed to capture finder entry:', error);
+        if (finderSearchHelp) {
+            finderSearchHelp.textContent = '';
+        }
+        alert(`Label Finder history save failed: ${error.message}`);
+        return false;
+    }
+}
+
+function getFinderEntryById(entryId) {
+    return finderEntries.find(entry => entry.id === entryId) || null;
+}
+
+async function getFinderEntryBlob(entryId) {
+    if (finderPdfCache.has(entryId)) {
+        return finderPdfCache.get(entryId);
+    }
+
+    const cachedBlob = await getFinderPdfFromCache(entryId);
+    if (cachedBlob) {
+        finderPdfCache.set(entryId, cachedBlob);
+        return cachedBlob;
+    }
+
+    const db = await openFinderDb();
+    try {
+        const tx = db.transaction(LABEL_FINDER_STORE, 'readonly');
+        const store = tx.objectStore(LABEL_FINDER_STORE);
+        const entry = await idbRequestToPromise(store.get(entryId));
+        if (entry && entry.pdfBlob) {
+            finderPdfCache.set(entryId, entry.pdfBlob);
+            return entry.pdfBlob;
+        }
+    } finally {
+        db.close();
+    }
+
+    return null;
+}
+
+async function renderPdfPageToCanvas(pdfBlob, pageIndex, canvasEl) {
+    if (!canvasEl || !pdfBlob || typeof pageIndex !== 'number') return;
+
+    const bytes = await pdfBlob.arrayBuffer();
+    const pdfDoc = await pdfjsLib.getDocument({ data: new Uint8Array(bytes) }).promise;
+    const page = await pdfDoc.getPage(pageIndex + 1);
+    const viewport = page.getViewport({ scale: 1.35 });
+    const ctx = canvasEl.getContext('2d');
+
+    canvasEl.width = viewport.width;
+    canvasEl.height = viewport.height;
+
+    await page.render({ canvasContext: ctx, viewport }).promise;
+}
+
+function clearFinderCanvas(canvasEl) {
+    if (!canvasEl) return;
+    const ctx = canvasEl.getContext('2d');
+    ctx.clearRect(0, 0, canvasEl.width || 1, canvasEl.height || 1);
+    canvasEl.width = 1;
+    canvasEl.height = 1;
+}
+
+function resetFinderSearchStateAfterPrint() {
+    if (finderSearchInput) {
+        finderSearchInput.value = '';
+    }
+    finderLastMatches = [];
+    finderCurrentSelection = null;
+    if (finderPrintBtn) {
+        finderPrintBtn.disabled = true;
+    }
+    if (finderSelectedMeta) {
+        finderSelectedMeta.textContent = '';
+    }
+    if (finderResultsList) {
+        finderResultsList.innerHTML = '';
+    }
+    clearFinderCanvas(finderLabelCanvas);
+}
+
+function isFinderTabActive() {
+    const finderTab = document.getElementById('finder-tab-content');
+    return Boolean(finderTab && finderTab.classList.contains('active'));
+}
+
+function handleFinderGlobalKeydown(event) {
+    if (!isFinderTabActive() || !finderSearchInput) return;
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+
+    const target = event.target;
+    const isTypingInField = target && (
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.isContentEditable
+    );
+
+    if (event.key === 'Enter') {
+        if (finderPrintBtn && !finderPrintBtn.disabled) {
+            event.preventDefault();
+            printFinderSelection();
+        }
+        return;
+    }
+
+    if (isTypingInField) return;
+
+    if (event.key === 'Backspace') {
+        event.preventDefault();
+        finderSearchInput.focus();
+        finderSearchInput.value = finderSearchInput.value.slice(0, -1);
+        finderSearchInput.dispatchEvent(new Event('input', { bubbles: true }));
+        return;
+    }
+
+    if (event.key.length === 1 && /[0-9A-Za-z]/.test(event.key)) {
+        event.preventDefault();
+        finderSearchInput.focus();
+        finderSearchInput.value += event.key;
+        finderSearchInput.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+}
+
+function getOrCreateFinderPrintFrame() {
+    if (finderPrintFrame && document.body.contains(finderPrintFrame)) {
+        return finderPrintFrame;
+    }
+
+    finderPrintFrame = document.createElement('iframe');
+    finderPrintFrame.id = 'finderPrintFrame';
+    finderPrintFrame.style.position = 'fixed';
+    finderPrintFrame.style.right = '0';
+    finderPrintFrame.style.bottom = '0';
+    finderPrintFrame.style.width = '0';
+    finderPrintFrame.style.height = '0';
+    finderPrintFrame.style.border = '0';
+    finderPrintFrame.style.opacity = '0';
+    finderPrintFrame.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(finderPrintFrame);
+    return finderPrintFrame;
+}
+
+async function selectFinderMatch(match) {
+    if (!match) return;
+
+    finderCurrentSelection = match;
+
+    const entry = getFinderEntryById(match.entryId);
+    const blob = await getFinderEntryBlob(match.entryId);
+
+    if (!entry || !blob) {
+        alert('Unable to load selected PDF entry.');
+        return;
+    }
+
+    await renderPdfPageToCanvas(blob, match.labelPageIndex, finderLabelCanvas);
+
+    finderPrintBtn.disabled = false;
+
+    finderSelectedMeta.textContent = `Tracking: ${match.tracking} · ${entry.fileName} · ${entry.createdAtDisplay}`;
+}
+
+function getFinderMatches(queryRaw) {
+    const query = normalizeFinderText(queryRaw);
+    if (!query || query.length < 4) return [];
+
+    const unique = new Set();
+    const matches = [];
+
+    for (const row of finderIndex) {
+        if (!row.trackingNormalized.includes(query)) continue;
+
+        const key = `${row.entryId}::${row.labelPageIndex}::${row.tracking}`;
+        if (unique.has(key)) continue;
+        unique.add(key);
+        matches.push(row);
+    }
+
+    return matches;
+}
+
+let finderLastMatches = [];
+
+function handleFinderSearchInput() {
+    clearTimeout(finderSearchDebounceTimer);
+
+    finderSearchDebounceTimer = setTimeout(async () => {
+        const query = finderSearchInput.value.trim();
+        const matches = getFinderMatches(query);
+        finderLastMatches = matches;
+
+        renderFinderResults(matches, normalizeFinderText(query));
+
+        if (matches.length === 1) {
+            await selectFinderMatch(matches[0]);
+        } else {
+            finderCurrentSelection = null;
+            finderPrintBtn.disabled = true;
+            finderSelectedMeta.textContent = '';
+            clearFinderCanvas(finderLabelCanvas);
+        }
+
+        if (finderSearchHelp) {
+            finderSearchHelp.textContent = '';
+        }
+    }, 60);
+}
+
+async function printFinderSelection() {
+    if (!finderCurrentSelection) {
+        alert('Please select a label result first.');
+        return;
+    }
+
+    const blob = await getFinderEntryBlob(finderCurrentSelection.entryId);
+    if (!blob) {
+        alert('Unable to load selected PDF for printing.');
+        return;
+    }
+
+    try {
+        const { PDFDocument } = PDFLib;
+        const sourceBytes = await blob.arrayBuffer();
+        const sourceDoc = await PDFDocument.load(sourceBytes);
+        const printDoc = await PDFDocument.create();
+        const includeInvoice = !finderIncludeInvoiceToggle || finderIncludeInvoiceToggle.checked;
+        const pagesToCopy = [finderCurrentSelection.labelPageIndex];
+
+        if (includeInvoice && typeof finderCurrentSelection.invoicePageIndex === 'number') {
+            pagesToCopy.push(finderCurrentSelection.invoicePageIndex);
+        }
+
+        const copiedPages = await printDoc.copyPages(sourceDoc, pagesToCopy);
+        copiedPages.forEach(page => printDoc.addPage(page));
+
+        const outputBytes = await printDoc.save();
+        const outputBlob = new Blob([outputBytes], { type: 'application/pdf' });
+        const outputUrl = URL.createObjectURL(outputBlob);
+
+        const printFrame = getOrCreateFinderPrintFrame();
+
+        if (finderPrintUrlToRevoke) {
+            try {
+                URL.revokeObjectURL(finderPrintUrlToRevoke);
+            } catch (revokeError) {
+                console.warn('Finder print URL revoke warning:', revokeError);
+            }
+            finderPrintUrlToRevoke = null;
+        }
+
+        finderPrintUrlToRevoke = outputUrl;
+        printFrame.onload = () => {
+            try {
+                printFrame.contentWindow.focus();
+                printFrame.contentWindow.print();
+                resetFinderSearchStateAfterPrint();
+            } catch (printError) {
+                console.error('Finder print frame error:', printError);
+                alert(`Print failed: ${printError.message}`);
+            }
+        };
+
+        printFrame.src = outputUrl;
+    } catch (error) {
+        console.error('Finder print failed:', error);
+        alert(`Print failed: ${error.message}`);
+    }
+}
+
+window.openFinderEntry = async function(entryId) {
+    const entry = getFinderEntryById(entryId);
+    if (!entry) return;
+
+    const representative = finderIndex.find(item => item.entryId === entryId);
+    if (!representative) {
+        finderSelectedMeta.textContent = '';
+        finderPrintBtn.disabled = true;
+        clearFinderCanvas(finderLabelCanvas);
+        return;
+    }
+
+    await selectFinderMatch(representative);
+};
+
+window.openFinderMatch = async function(matchIndex) {
+    const match = finderLastMatches[matchIndex];
+    if (!match) return;
+    await selectFinderMatch(match);
+};
+
+window.requestFinderHistoryDelete = function(entryId) {
+    pendingFinderDeleteEntryId = entryId;
+    showPasswordModal('finderDelete');
+};
 
 // ============================================
 // GOOGLE APPS SCRIPT CODE (for user to deploy)

@@ -16,21 +16,24 @@
             <h1>🏷️ JB Creations - Shipping Label Sorter</h1>
             <p>Upload your Flipkart, Amazon, and Meesho shipping labels together - automatic platform detection</p>
             <nav class="tab-nav">
-                <button class="tab-btn active" data-tab="sorting" onclick="switchTab('sorting')">
+                <button class="tab-btn active" data-tab="cropping" onclick="switchTab('cropping')">
+                    ✂️ Label Cropping
+                </button>
+                <button class="tab-btn" data-tab="sorting" onclick="switchTab('sorting')">
                     📋 Label Sorting
                 </button>
                 <button class="tab-btn" data-tab="counter" onclick="switchTab('counter')">
                     🔢 Label Counter
                 </button>
-                <button class="tab-btn" data-tab="cropping" onclick="switchTab('cropping')">
-                    ✂️ Label Cropping
+                <button class="tab-btn" data-tab="finder" onclick="switchTab('finder')">
+                    🔎 Label Finder
                 </button>
             </nav>
         </header>
 
         <main>
             <!-- SORTING TAB CONTENT -->
-            <div id="sorting-tab-content" class="tab-content active">
+            <div id="sorting-tab-content" class="tab-content">
             <section class="upload-section">
                 <div class="upload-area" id="uploadArea">
                     <div class="upload-icon">📤</div>
@@ -221,7 +224,7 @@
             <!-- END COUNTER TAB CONTENT -->
 
             <!-- CROPPING TAB CONTENT -->
-            <div id="cropping-tab-content" class="tab-content">
+            <div id="cropping-tab-content" class="tab-content active">
                 <section class="upload-section">
                     <div class="upload-area" id="croppingUploadArea">
                         <div class="upload-icon">✂️</div>
@@ -295,6 +298,50 @@
                 </section>
             </div>
             <!-- END CROPPING TAB CONTENT -->
+
+            <!-- FINDER TAB CONTENT -->
+            <div id="finder-tab-content" class="tab-content">
+                <section class="finder-search-section">
+                    <div class="finder-search-row">
+                        <input type="text" id="finderSearchInput" placeholder="Enter tracking number (type 4+ chars)">
+                        <label class="finder-print-toggle">
+                            <input type="checkbox" id="finderIncludeInvoiceToggle" checked>
+                            Print with invoice
+                        </label>
+                        <button class="btn btn-success" id="finderPrintBtn" disabled>
+                            🖨️ Print
+                        </button>
+                    </div>
+                </section>
+
+                <section class="finder-results-section">
+                    <div class="results-card">
+                        <h3>🎯 Results</h3>
+                        <div id="finderResultsList" class="finder-results-list"></div>
+                    </div>
+                </section>
+
+                <section class="finder-preview-section">
+                    <div class="results-card">
+                        <h3>👁️ Label Preview</h3>
+                        <p id="finderSelectedMeta" class="finder-selected-meta"></p>
+                        <div class="finder-preview-grid">
+                            <div class="finder-preview-item">
+                                <h4>Label Page</h4>
+                                <canvas id="finderLabelCanvas"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="finder-history-section">
+                    <div class="results-card">
+                        <h3>🗂️ History</h3>
+                        <div id="finderHistoryList" class="finder-history-list"></div>
+                    </div>
+                </section>
+            </div>
+            <!-- END FINDER TAB CONTENT -->
 
             <!-- Password Modal -->
             <div class="modal" id="passwordModal" style="display: none;">
