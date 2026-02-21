@@ -91,6 +91,7 @@ let PRIORITY_LABELS = [
 // Password for editing
 const EDIT_PASSWORD = '200274';
 const CRITERIA_PASSWORD = '200274'; // Same password for criteria settings
+const DEVICE_AUTH_STORAGE_KEY = 'jb_device_authorized_v1';
 
 // Default Label Detection Criteria
 const DEFAULT_LABEL_CRITERIA = {
@@ -253,6 +254,7 @@ let finderCurrentSelection = null;
 let finderSearchDebounceTimer = null;
 let finderPrintFrame = null;
 let finderPrintUrlToRevoke = null;
+let hasAppStarted = false;
 
 // Tab switching function
 function switchTab(tabName) {
@@ -350,11 +352,107 @@ const finderHistoryList = document.getElementById('finderHistoryList');
 const finderResultsList = document.getElementById('finderResultsList');
 const finderSelectedMeta = document.getElementById('finderSelectedMeta');
 const finderLabelCanvas = document.getElementById('finderLabelCanvas');
+const deviceAuthModal = document.getElementById('deviceAuthModal');
+const deviceAuthInput = document.getElementById('deviceAuthInput');
+const deviceAuthSubmitBtn = document.getElementById('deviceAuthSubmitBtn');
+const deviceAuthError = document.getElementById('deviceAuthError');
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
-    initializeApp();
+    initializeDeviceAccess();
 });
+
+function initializeDeviceAccess() {
+    if (deviceAuthSubmitBtn) {
+        deviceAuthSubmitBtn.addEventListener('click', submitDeviceAccessCode);
+    }
+
+    if (deviceAuthInput) {
+        deviceAuthInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                submitDeviceAccessCode();
+            }
+        });
+    }
+
+    if (isDeviceAuthorized()) {
+        setAppLockState(false);
+        startApplicationOnce();
+        return;
+    }
+
+    setAppLockState(true);
+    showDeviceAccessModal();
+}
+
+function startApplicationOnce() {
+    if (hasAppStarted) return;
+    hasAppStarted = true;
+    initializeApp();
+    initCroppingTab();
+}
+
+function isDeviceAuthorized() {
+    try {
+        return localStorage.getItem(DEVICE_AUTH_STORAGE_KEY) === 'true';
+    } catch (error) {
+        console.warn('Could not read device authorization from localStorage:', error);
+        return false;
+    }
+}
+
+function authorizeThisDevice() {
+    try {
+        localStorage.setItem(DEVICE_AUTH_STORAGE_KEY, 'true');
+    } catch (error) {
+        console.warn('Could not persist device authorization in localStorage:', error);
+    }
+}
+
+function setAppLockState(isLocked) {
+    if (!document.body) return;
+    document.body.classList.toggle('app-auth-locked', isLocked);
+}
+
+function showDeviceAccessModal() {
+    if (!deviceAuthModal) {
+        alert('Device verification is required to access this website.');
+        return;
+    }
+
+    deviceAuthModal.style.display = 'flex';
+    if (deviceAuthInput) {
+        deviceAuthInput.value = '';
+        deviceAuthInput.focus();
+    }
+    if (deviceAuthError) {
+        deviceAuthError.style.display = 'none';
+    }
+}
+
+function hideDeviceAccessModal() {
+    if (deviceAuthModal) {
+        deviceAuthModal.style.display = 'none';
+    }
+}
+
+function submitDeviceAccessCode() {
+    if (!deviceAuthInput) return;
+
+    if (deviceAuthInput.value === EDIT_PASSWORD) {
+        authorizeThisDevice();
+        hideDeviceAccessModal();
+        setAppLockState(false);
+        startApplicationOnce();
+        return;
+    }
+
+    if (deviceAuthError) {
+        deviceAuthError.style.display = 'block';
+    }
+    deviceAuthInput.value = '';
+    deviceAuthInput.focus();
+}
 
 function initializeApp() {
     // Display priority list (with default labels first)
@@ -5573,7 +5671,4 @@ async function downloadAllCropped() {
     }
 }
 
-// --- Initialize cropping tab on DOMContentLoaded ---
-document.addEventListener('DOMContentLoaded', () => {
-    initCroppingTab();
-});
+// Cropping tab initialization runs through startApplicationOnce() after device verification.

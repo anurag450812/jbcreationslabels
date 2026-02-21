@@ -537,6 +537,19 @@ function doGet(e) {
         </footer>
     </div>
 
+    <!-- Device Access Modal (first-time per device) -->
+    <div class="modal" id="deviceAuthModal" style="display: none;">
+        <div class="modal-content">
+            <h3>🔐 Device Verification</h3>
+            <p>Enter passcode to access this website on this device.</p>
+            <input type="password" id="deviceAuthInput" placeholder="Enter passcode">
+            <div class="modal-buttons">
+                <button class="btn btn-primary" id="deviceAuthSubmitBtn">Unlock</button>
+            </div>
+            <p class="error-message" id="deviceAuthError" style="display: none;">Incorrect passcode!</p>
+        </div>
+    </div>
+
     <script src="script.js"></script>
     <script>
         function copyAppsScript() {

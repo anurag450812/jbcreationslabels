@@ -27,6 +27,14 @@ body {
     color: var(--text-primary);
 }
 
+body.app-auth-locked .container {
+    display: none;
+}
+
+#deviceAuthModal {
+    z-index: 20000;
+}
+
 .container {
     max-width: 1200px;
     margin: 0 auto;
