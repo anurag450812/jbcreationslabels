@@ -3256,14 +3256,18 @@ function renderFinderResults(matches, query) {
     if (!finderResultsList) return;
 
     if (!query || query.length < 3) {
+        finderRenderedMatches = [];
         finderResultsList.innerHTML = '';
         return;
     }
 
     if (!matches.length) {
+        finderRenderedMatches = [];
         finderResultsList.innerHTML = '';
         return;
     }
+
+    finderRenderedMatches = matches.slice();
 
     finderResultsList.innerHTML = matches
         .map((match, index) => `
@@ -3272,10 +3276,19 @@ function renderFinderResults(matches, query) {
                     <div class="finder-item-title">${match.tracking}</div>
                     <div class="finder-item-subtitle">${match.fileName} · ${match.createdAtDisplay}</div>
                 </div>
-                <button class="btn btn-secondary" onclick="openFinderMatch(${index})">Open</button>
+                <button class="btn btn-secondary" data-finder-match-index="${index}">Open</button>
             </div>
         `)
         .join('');
+
+    finderResultsList.querySelectorAll('[data-finder-match-index]').forEach(button => {
+        button.addEventListener('click', async () => {
+            const index = Number(button.getAttribute('data-finder-match-index'));
+            const match = finderRenderedMatches[index];
+            if (!match) return;
+            await selectFinderMatch(match);
+        });
+    });
 }
 
 async function initializeLabelFinder() {
@@ -3574,6 +3587,15 @@ function getFinderMatches(queryRaw) {
 }
 
 let finderLastMatches = [];
+let finderRenderedMatches = [];
+
+function isSameFinderMatch(a, b) {
+    if (!a || !b) return false;
+
+    return a.entryId === b.entryId &&
+        a.labelPageIndex === b.labelPageIndex &&
+        a.tracking === b.tracking;
+}
 
 function handleFinderSearchInput() {
     clearTimeout(finderSearchDebounceTimer);
@@ -3588,10 +3610,16 @@ function handleFinderSearchInput() {
         if (matches.length === 1) {
             await selectFinderMatch(matches[0]);
         } else {
-            finderCurrentSelection = null;
-            finderPrintBtn.disabled = true;
-            finderSelectedMeta.textContent = '';
-            clearFinderCanvas(finderLabelCanvas);
+            const selectedStillVisible = finderCurrentSelection
+                ? matches.some(match => isSameFinderMatch(match, finderCurrentSelection))
+                : false;
+
+            if (!selectedStillVisible) {
+                finderCurrentSelection = null;
+                finderPrintBtn.disabled = true;
+                finderSelectedMeta.textContent = '';
+                clearFinderCanvas(finderLabelCanvas);
+            }
         }
 
         if (finderSearchHelp) {
@@ -3677,7 +3705,7 @@ window.openFinderEntry = async function(entryId) {
 };
 
 window.openFinderMatch = async function(matchIndex) {
-    const match = finderLastMatches[matchIndex];
+    const match = finderRenderedMatches[matchIndex] || finderLastMatches[matchIndex];
     if (!match) return;
     await selectFinderMatch(match);
 };
