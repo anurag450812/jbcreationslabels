@@ -3599,23 +3599,18 @@ async function createFinderSubsetPdfBlob(sourceBlob, pageIndexes) {
 
 function openBlobInBackgroundTab(blob) {
     const url = URL.createObjectURL(blob);
-    const opened = window.open(url, '_blank', 'noopener,noreferrer');
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.target = '_blank';
+    anchor.rel = 'noopener noreferrer';
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
 
-    if (!opened) {
-        const anchor = document.createElement('a');
-        anchor.href = url;
-        anchor.target = '_blank';
-        anchor.rel = 'noopener noreferrer';
-        document.body.appendChild(anchor);
-        anchor.click();
-        document.body.removeChild(anchor);
-    } else {
-        try {
-            opened.blur();
-            window.focus();
-        } catch (error) {
-            console.warn('Unable to preserve current tab focus after opening PDF tab:', error);
-        }
+    try {
+        window.focus();
+    } catch (error) {
+        console.warn('Unable to preserve current tab focus after opening PDF tab:', error);
     }
 
     setTimeout(() => {
