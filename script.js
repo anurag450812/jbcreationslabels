@@ -247,6 +247,7 @@ const LABEL_FINDER_STORE = 'finderEntries';
 const LABEL_FINDER_LIMIT = 10;
 const LABEL_FINDER_CACHE = 'finder-pdf-cache-v1';
 const FINDER_CAN_USE_CACHE_API = false;
+const FINDER_COURIER_KEYS = ['ekart', 'xpressbees', 'shadowfax', 'delhivery', 'valmo'];
 let finderEntries = [];
 let finderPdfCache = new Map();
 let finderIndex = [];
@@ -254,6 +255,7 @@ let finderCurrentSelection = null;
 let finderSearchDebounceTimer = null;
 let finderPrintFrame = null;
 let finderPrintUrlToRevoke = null;
+let finderSelectedCourier = '';
 let hasAppStarted = false;
 
 // Tab switching function
@@ -347,6 +349,7 @@ const resetCriteriaBtn = document.getElementById('resetCriteriaBtn');
 const finderSearchInput = document.getElementById('finderSearchInput');
 const finderPrintBtn = document.getElementById('finderPrintBtn');
 const finderIncludeInvoiceToggle = document.getElementById('finderIncludeInvoiceToggle');
+const finderCourierFilterRow = document.getElementById('finderCourierFilterRow');
 const finderSearchHelp = document.getElementById('finderSearchHelp');
 const finderHistoryList = document.getElementById('finderHistoryList');
 const finderResultsList = document.getElementById('finderResultsList');
@@ -788,6 +791,22 @@ function setupEventListeners() {
     }
     if (finderPrintBtn) {
         finderPrintBtn.addEventListener('click', printFinderSelection);
+    }
+    if (finderCourierFilterRow) {
+        finderCourierFilterRow.addEventListener('click', event => {
+            const button = event.target.closest('[data-finder-courier]');
+            if (!button) return;
+
+            const key = normalizeFinderCourierKey(button.getAttribute('data-finder-courier'));
+            if (key === finderSelectedCourier) return;
+
+            finderSelectedCourier = key;
+            renderFinderCourierFilters();
+
+            if (finderSearchInput) {
+                finderSearchInput.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+        });
     }
 
     document.addEventListener('keydown', handleFinderGlobalKeydown);
@@ -2983,6 +3002,46 @@ function normalizeFinderText(text) {
     return String(text || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
 
+function normalizeFinderCourierKey(key) {
+    const normalized = String(key || '').toLowerCase().replace(/[^a-z]/g, '');
+    if (FINDER_COURIER_KEYS.includes(normalized)) {
+        return normalized;
+    }
+    return '';
+}
+
+function detectFinderCourierKey(pageText) {
+    const text = String(pageText || '').toUpperCase();
+
+    if (/\bE\s*[- ]?\s*KART\b|\bEKART\b/.test(text)) return 'ekart';
+    if (/\bXPRESS\s*[- ]?\s*BEES\b|\bXPRESSBEES\b/.test(text)) return 'xpressbees';
+    if (/\bSHADOW\s*[- ]?\s*FAX\b|\bSHADOWFAX\b/.test(text)) return 'shadowfax';
+    if (/\bDELHIVERY\b/.test(text)) return 'delhivery';
+    if (/\bVALMO\b/.test(text)) return 'valmo';
+
+    return 'unknown';
+}
+
+function getFinderCourierLabel(courierKey) {
+    switch (courierKey) {
+        case 'ekart': return 'E-Kart';
+        case 'xpressbees': return 'Xpress Bees';
+        case 'shadowfax': return 'Shadowfax';
+        case 'delhivery': return 'Delhivery';
+        case 'valmo': return 'Valmo';
+        default: return 'Unknown Courier';
+    }
+}
+
+function renderFinderCourierFilters() {
+    if (!finderCourierFilterRow) return;
+
+    finderCourierFilterRow.querySelectorAll('[data-finder-courier]').forEach(button => {
+        const key = normalizeFinderCourierKey(button.getAttribute('data-finder-courier'));
+        button.classList.toggle('active', key === finderSelectedCourier);
+    });
+}
+
 function getFinderEntryMeta(entry) {
     return {
         id: entry.id,
@@ -3219,6 +3278,8 @@ function buildFinderIndex() {
                 timestampMs,
                 tracking: trackingInfo.tracking,
                 trackingNormalized: normalized,
+                courierKey: String(trackingInfo.courierKey || 'unknown').toLowerCase(),
+                courierLabel: getFinderCourierLabel(String(trackingInfo.courierKey || 'unknown').toLowerCase()),
                 labelPageIndex: trackingInfo.labelPageIndex,
                 invoicePageIndex: typeof trackingInfo.invoicePageIndex === 'number' ? trackingInfo.invoicePageIndex : null
             });
@@ -3265,7 +3326,7 @@ function renderFinderHistory() {
             event.preventDefault();
             const entryId = button.getAttribute('data-finder-entry-delete');
             if (!entryId) return;
-            requestFinderHistoryDelete(entryId);
+            window.requestFinderHistoryDelete(entryId);
         });
     });
 }
@@ -3292,7 +3353,7 @@ function renderFinderResults(matches, query) {
             <div class="finder-result-item">
                 <div class="finder-item-meta">
                     <div class="finder-item-title">${match.tracking}</div>
-                    <div class="finder-item-subtitle">${match.fileName} · ${match.createdAtDisplay}</div>
+                    <div class="finder-item-subtitle">${match.fileName} · ${match.createdAtDisplay} · ${match.courierLabel}</div>
                 </div>
                 <button class="btn btn-secondary" data-finder-match-index="${index}">Open</button>
             </div>
@@ -3314,6 +3375,7 @@ async function initializeLabelFinder() {
     if (!finderHistoryList) return;
 
     try {
+        renderFinderCourierFilters();
         await refreshFinderFromStorage();
         renderFinderResults([], '');
     } catch (error) {
@@ -3359,6 +3421,7 @@ async function extractTrackingsFromSortedPdf(pdfBytes) {
         const page = await pdfDoc.getPage(pageNumber);
         const textContent = await page.getTextContent();
         const pageText = textContent.items.map(item => item.str || '').join(' ');
+        const courierKey = detectFinderCourierKey(pageText);
         const hasLabelSignal = hasBarcodeLikeTextForSorter(String(pageText || '').toLowerCase()) || /AWB|TRACKING|SHIP(?:PING)?|PICKUP|DELIVERY|RETURN\s+TO/i.test(pageText);
         if (!hasLabelSignal) continue;
 
@@ -3370,7 +3433,7 @@ async function extractTrackingsFromSortedPdf(pdfBytes) {
             const key = `${tracking}::${labelPageIndex}`;
             if (seen.has(key)) return;
             seen.add(key);
-            trackingRecords.push({ tracking, labelPageIndex, invoicePageIndex });
+            trackingRecords.push({ tracking, labelPageIndex, invoicePageIndex, courierKey });
         });
     }
 
@@ -3674,6 +3737,7 @@ function getFinderMatches(queryRaw) {
 
     for (const row of finderIndex) {
         if (!row.trackingNormalized.includes(query)) continue;
+        if (finderSelectedCourier && row.courierKey !== finderSelectedCourier) continue;
 
         const key = `${row.entryId}::${row.labelPageIndex}::${row.tracking}`;
         if (unique.has(key)) continue;
