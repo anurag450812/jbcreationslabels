@@ -3567,6 +3567,70 @@ async function selectFinderMatch(match) {
     finderSelectedMeta.textContent = `Tracking: ${match.tracking} · ${entry.fileName} · ${entry.createdAtDisplay}`;
 }
 
+async function createFinderSubsetPdfBlob(sourceBlob, pageIndexes) {
+    const { PDFDocument } = PDFLib;
+    const sourceBytes = await sourceBlob.arrayBuffer();
+    const sourceDoc = await PDFDocument.load(sourceBytes);
+    const outputDoc = await PDFDocument.create();
+    const pages = await outputDoc.copyPages(sourceDoc, pageIndexes);
+    pages.forEach(page => outputDoc.addPage(page));
+    const outputBytes = await outputDoc.save();
+    return new Blob([outputBytes], { type: 'application/pdf' });
+}
+
+function openBlobInBackgroundTab(blob) {
+    const url = URL.createObjectURL(blob);
+    const opened = window.open(url, '_blank', 'noopener,noreferrer');
+
+    if (!opened) {
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.target = '_blank';
+        anchor.rel = 'noopener noreferrer';
+        document.body.appendChild(anchor);
+        anchor.click();
+        document.body.removeChild(anchor);
+    } else {
+        try {
+            opened.blur();
+            window.focus();
+        } catch (error) {
+            console.warn('Unable to preserve current tab focus after opening PDF tab:', error);
+        }
+    }
+
+    setTimeout(() => {
+        try {
+            URL.revokeObjectURL(url);
+        } catch (error) {
+            console.warn('Failed to revoke finder PDF URL:', error);
+        }
+    }, 120000);
+}
+
+async function openFinderMatchPdf(match) {
+    if (!match) return;
+
+    const sourceBlob = await getFinderEntryBlob(match.entryId);
+    if (!sourceBlob) {
+        alert('Unable to load selected PDF entry.');
+        return;
+    }
+
+    const labelBlob = await createFinderSubsetPdfBlob(sourceBlob, [match.labelPageIndex]);
+    openBlobInBackgroundTab(labelBlob);
+}
+
+async function openFinderEntryPdf(entryId) {
+    const blob = await getFinderEntryBlob(entryId);
+    if (!blob) {
+        alert('Unable to load selected PDF entry.');
+        return;
+    }
+
+    openBlobInBackgroundTab(blob);
+}
+
 function getFinderMatches(queryRaw) {
     const query = normalizeFinderText(queryRaw);
     if (!query || query.length < 3) return [];
@@ -3690,26 +3754,13 @@ async function printFinderSelection() {
 }
 
 window.openFinderEntry = async function(entryId) {
-    const entry = getFinderEntryById(entryId);
-    if (!entry) return;
-
-    const representative = finderIndex.find(item => item.entryId === entryId);
-    if (!representative) {
-        finderSelectedMeta.textContent = '';
-        finderPrintBtn.disabled = true;
-        clearFinderCanvas(finderLabelCanvas);
-        return;
-    }
-
-    await selectFinderMatch(representative);
-    await printFinderSelection();
+    await openFinderEntryPdf(entryId);
 };
 
 window.openFinderMatch = async function(matchIndex) {
     const match = finderRenderedMatches[matchIndex] || finderLastMatches[matchIndex];
     if (!match) return;
-    await selectFinderMatch(match);
-    await printFinderSelection();
+    await openFinderMatchPdf(match);
 };
 
 window.requestFinderHistoryDelete = function(entryId) {
