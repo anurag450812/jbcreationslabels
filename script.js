@@ -3244,12 +3244,30 @@ function renderFinderHistory() {
                     <div class="finder-item-subtitle">${entry.createdAtDisplay} · ${entry.pageCount} pages · ${entry.trackingCount} tracking numbers</div>
                 </div>
                 <div class="finder-history-actions">
-                    <button class="btn btn-secondary" onclick="openFinderEntry('${entry.id}')">Open</button>
-                    <button class="btn btn-secondary" onclick="requestFinderHistoryDelete('${entry.id}')">Delete</button>
+                    <button class="btn btn-secondary" data-finder-entry-open="${entry.id}">Open</button>
+                    <button class="btn btn-secondary" data-finder-entry-delete="${entry.id}">Delete</button>
                 </div>
             </div>
         `)
         .join('');
+
+    finderHistoryList.querySelectorAll('[data-finder-entry-open]').forEach(button => {
+        button.addEventListener('click', async event => {
+            event.preventDefault();
+            const entryId = button.getAttribute('data-finder-entry-open');
+            if (!entryId) return;
+            await openFinderEntryPdf(entryId);
+        });
+    });
+
+    finderHistoryList.querySelectorAll('[data-finder-entry-delete]').forEach(button => {
+        button.addEventListener('click', event => {
+            event.preventDefault();
+            const entryId = button.getAttribute('data-finder-entry-delete');
+            if (!entryId) return;
+            requestFinderHistoryDelete(entryId);
+        });
+    });
 }
 
 function renderFinderResults(matches, query) {
@@ -3282,11 +3300,12 @@ function renderFinderResults(matches, query) {
         .join('');
 
     finderResultsList.querySelectorAll('[data-finder-match-index]').forEach(button => {
-        button.addEventListener('click', async () => {
+        button.addEventListener('click', async event => {
+            event.preventDefault();
             const index = Number(button.getAttribute('data-finder-match-index'));
             const match = finderRenderedMatches[index];
             if (!match) return;
-            await selectFinderMatch(match);
+            await openFinderMatchPdf(match);
         });
     });
 }
@@ -3608,8 +3627,25 @@ function openBlobInBackgroundTab(blob) {
     }, 120000);
 }
 
+let finderLastOpenRequestKey = '';
+let finderLastOpenRequestAt = 0;
+
+function shouldSkipDuplicateFinderOpen(requestKey) {
+    const now = Date.now();
+    if (finderLastOpenRequestKey === requestKey && (now - finderLastOpenRequestAt) < 700) {
+        return true;
+    }
+
+    finderLastOpenRequestKey = requestKey;
+    finderLastOpenRequestAt = now;
+    return false;
+}
+
 async function openFinderMatchPdf(match) {
     if (!match) return;
+
+    const requestKey = `match:${match.entryId}:${match.labelPageIndex}:${match.tracking}`;
+    if (shouldSkipDuplicateFinderOpen(requestKey)) return;
 
     const sourceBlob = await getFinderEntryBlob(match.entryId);
     if (!sourceBlob) {
@@ -3622,6 +3658,9 @@ async function openFinderMatchPdf(match) {
 }
 
 async function openFinderEntryPdf(entryId) {
+    const requestKey = `entry:${entryId}`;
+    if (shouldSkipDuplicateFinderOpen(requestKey)) return;
+
     const blob = await getFinderEntryBlob(entryId);
     if (!blob) {
         alert('Unable to load selected PDF entry.');
