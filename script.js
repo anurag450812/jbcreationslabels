@@ -3260,62 +3260,11 @@ async function buildFinderCourierMapFromPdf(entryBlob, trackings) {
     return courierMap;
 }
 
-async function backfillFinderCouriers(entries) {
-    if (!Array.isArray(entries) || !entries.length) return;
+let finderCourierBackfillRunId = 0;
 
-    for (const entry of entries) {
-        const trackings = Array.isArray(entry.trackings) ? entry.trackings : [];
-        if (!trackings.length) continue;
-
-        const hasMissingCourier = trackings.some(item => !item || !item.courierKey || item.courierKey === 'unknown');
-        if (!hasMissingCourier) continue;
-
-        const blob = entry.pdfBlob;
-        if (!blob) continue;
-
-        try {
-            const courierMap = await buildFinderCourierMapFromPdf(blob, trackings);
-            if (!courierMap.size) continue;
-
-            let changed = false;
-            entry.trackings = trackings.map(item => {
-                if (!item || !Number.isInteger(item.labelPageIndex)) {
-                    return item;
-                }
-
-                const detectedCourier = courierMap.get(item.labelPageIndex);
-                if (!detectedCourier) {
-                    return item;
-                }
-
-                if (item.courierKey === detectedCourier) {
-                    return item;
-                }
-
-                changed = true;
-                return {
-                    ...item,
-                    courierKey: detectedCourier
-                };
-            });
-
-            if (changed) {
-                await saveFinderEntry(entry);
-            }
-        } catch (error) {
-            console.warn('Finder courier backfill skipped for entry:', entry.id, error);
-        }
-    }
-}
-
-async function refreshFinderFromStorage() {
-    const entries = await getAllFinderEntries();
-    const sortedEntries = entries.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-
-    await backfillFinderCouriers(sortedEntries);
-
+function syncFinderStateFromRawEntries(rawEntries) {
     finderPdfCache.clear();
-    finderEntries = sortedEntries.map(entry => {
+    finderEntries = rawEntries.map(entry => {
         if (entry.pdfBlob) {
             finderPdfCache.set(entry.id, entry.pdfBlob);
         }
@@ -3324,6 +3273,104 @@ async function refreshFinderFromStorage() {
 
     buildFinderIndex();
     renderFinderHistory();
+}
+
+function scheduleFinderCourierBackfill(entries) {
+    if (!Array.isArray(entries) || !entries.length) return;
+
+    const runId = ++finderCourierBackfillRunId;
+    const targets = entries.filter(entry => {
+        const trackings = Array.isArray(entry.trackings) ? entry.trackings : [];
+        if (!trackings.length || !entry.pdfBlob) return false;
+        return trackings.some(item => !item || !item.courierKey || item.courierKey === 'unknown');
+    });
+
+    if (!targets.length) return;
+
+    const schedule = window.requestIdleCallback
+        ? (callback) => window.requestIdleCallback(callback, { timeout: 180 })
+        : (callback) => setTimeout(callback, 0);
+
+    let index = 0;
+
+    const processChunk = async () => {
+        if (runId !== finderCourierBackfillRunId) return;
+
+        let changedAny = false;
+        let processed = 0;
+
+        while (index < targets.length && processed < 1) {
+            const entry = targets[index++];
+            const trackings = Array.isArray(entry.trackings) ? entry.trackings : [];
+
+            try {
+                const courierMap = await buildFinderCourierMapFromPdf(entry.pdfBlob, trackings);
+                if (!courierMap.size) {
+                    processed++;
+                    continue;
+                }
+
+                let changed = false;
+                entry.trackings = trackings.map(item => {
+                    if (!item || !Number.isInteger(item.labelPageIndex)) {
+                        return item;
+                    }
+
+                    const detectedCourier = courierMap.get(item.labelPageIndex);
+                    if (!detectedCourier || item.courierKey === detectedCourier) {
+                        return item;
+                    }
+
+                    changed = true;
+                    return {
+                        ...item,
+                        courierKey: detectedCourier
+                    };
+                });
+
+                if (changed) {
+                    await saveFinderEntry(entry);
+                    changedAny = true;
+                }
+            } catch (error) {
+                console.warn('Finder courier backfill skipped for entry:', entry.id, error);
+            }
+
+            processed++;
+        }
+
+        if (runId !== finderCourierBackfillRunId) return;
+
+        if (changedAny) {
+            syncFinderStateFromRawEntries(entries);
+
+            if (finderSearchInput && finderSearchInput.value.trim()) {
+                finderSearchInput.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+        }
+
+        if (index < targets.length) {
+            schedule(() => {
+                processChunk().catch(error => {
+                    console.error('Finder courier backfill chunk failed:', error);
+                });
+            });
+        }
+    };
+
+    schedule(() => {
+        processChunk().catch(error => {
+            console.error('Finder courier backfill start failed:', error);
+        });
+    });
+}
+
+async function refreshFinderFromStorage() {
+    const entries = await getAllFinderEntries();
+    const sortedEntries = entries.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+    syncFinderStateFromRawEntries(sortedEntries);
+    scheduleFinderCourierBackfill(sortedEntries);
 }
 
 async function confirmFinderHistoryDelete() {
