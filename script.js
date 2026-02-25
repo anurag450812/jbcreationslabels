@@ -3255,7 +3255,7 @@ function renderFinderHistory() {
 function renderFinderResults(matches, query) {
     if (!finderResultsList) return;
 
-    if (!query || query.length < 4) {
+    if (!query || query.length < 3) {
         finderResultsList.innerHTML = '';
         return;
     }
@@ -3556,7 +3556,7 @@ async function selectFinderMatch(match) {
 
 function getFinderMatches(queryRaw) {
     const query = normalizeFinderText(queryRaw);
-    if (!query || query.length < 4) return [];
+    if (!query || query.length < 3) return [];
 
     const unique = new Set();
     const matches = [];
