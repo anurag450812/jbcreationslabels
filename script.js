@@ -3231,9 +3231,88 @@ async function deleteFinderEntry(entryId) {
     }
 }
 
+async function buildFinderCourierMapFromPdf(entryBlob, trackings) {
+    const pageIndexes = Array.from(new Set(
+        (Array.isArray(trackings) ? trackings : [])
+            .map(item => item && item.labelPageIndex)
+            .filter(pageIndex => Number.isInteger(pageIndex) && pageIndex >= 0)
+    ));
+
+    if (!pageIndexes.length) {
+        return new Map();
+    }
+
+    const bytes = await entryBlob.arrayBuffer();
+    const pdfDoc = await pdfjsLib.getDocument({ data: new Uint8Array(bytes) }).promise;
+    const courierMap = new Map();
+
+    for (const pageIndex of pageIndexes) {
+        if (pageIndex >= pdfDoc.numPages) {
+            continue;
+        }
+
+        const page = await pdfDoc.getPage(pageIndex + 1);
+        const textContent = await page.getTextContent();
+        const pageText = textContent.items.map(item => item.str || '').join(' ');
+        courierMap.set(pageIndex, detectFinderCourierKey(pageText));
+    }
+
+    return courierMap;
+}
+
+async function backfillFinderCouriers(entries) {
+    if (!Array.isArray(entries) || !entries.length) return;
+
+    for (const entry of entries) {
+        const trackings = Array.isArray(entry.trackings) ? entry.trackings : [];
+        if (!trackings.length) continue;
+
+        const hasMissingCourier = trackings.some(item => !item || !item.courierKey || item.courierKey === 'unknown');
+        if (!hasMissingCourier) continue;
+
+        const blob = entry.pdfBlob;
+        if (!blob) continue;
+
+        try {
+            const courierMap = await buildFinderCourierMapFromPdf(blob, trackings);
+            if (!courierMap.size) continue;
+
+            let changed = false;
+            entry.trackings = trackings.map(item => {
+                if (!item || !Number.isInteger(item.labelPageIndex)) {
+                    return item;
+                }
+
+                const detectedCourier = courierMap.get(item.labelPageIndex);
+                if (!detectedCourier) {
+                    return item;
+                }
+
+                if (item.courierKey === detectedCourier) {
+                    return item;
+                }
+
+                changed = true;
+                return {
+                    ...item,
+                    courierKey: detectedCourier
+                };
+            });
+
+            if (changed) {
+                await saveFinderEntry(entry);
+            }
+        } catch (error) {
+            console.warn('Finder courier backfill skipped for entry:', entry.id, error);
+        }
+    }
+}
+
 async function refreshFinderFromStorage() {
     const entries = await getAllFinderEntries();
     const sortedEntries = entries.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+    await backfillFinderCouriers(sortedEntries);
 
     finderPdfCache.clear();
     finderEntries = sortedEntries.map(entry => {
