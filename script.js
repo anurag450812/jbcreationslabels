@@ -3702,12 +3702,14 @@ window.openFinderEntry = async function(entryId) {
     }
 
     await selectFinderMatch(representative);
+    await printFinderSelection();
 };
 
 window.openFinderMatch = async function(matchIndex) {
     const match = finderRenderedMatches[matchIndex] || finderLastMatches[matchIndex];
     if (!match) return;
     await selectFinderMatch(match);
+    await printFinderSelection();
 };
 
 window.requestFinderHistoryDelete = function(entryId) {
