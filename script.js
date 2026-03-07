@@ -5220,6 +5220,56 @@ function formatSKUOverlay(skuData) {
     return skuData.map(s => `SKU: ${s.sku} | Qty: ${s.qty}`).join('\n');
 }
 
+function isLikelyStandaloneMeeshoLabelPage(textItems) {
+    if (!Array.isArray(textItems) || textItems.length === 0) return false;
+
+    const joinedText = textItems
+        .map(item => (item && item.str ? String(item.str).trim() : ''))
+        .filter(Boolean)
+        .join(' ');
+    const upperText = joinedText.toUpperCase();
+
+    const hasReturnTo = /RETURN\s+TO|IF\s+UNDELIVERED/i.test(joinedText);
+    const hasPickup = upperText.includes('PICKUP');
+    const hasCourier = ['DELHIVERY', 'SHADOWFAX', 'VALMO', 'XPRESS BEES', 'ECOM EXPRESS', 'EKART']
+        .some(courier => upperText.includes(courier));
+    const hasShippingContext = /SHIP\s*TO|DELIVERY\s+ADDRESS|CUSTOMER\s+ADDRESS|AWB|TRACKING/i.test(joinedText);
+    const hasBarcodeLikeContent = hasFlipkartBarcodeLikeContent(textItems);
+    const hasInvoiceHeavyMarkers = /\bINVOICE\b|\bHSN\b|AMOUNT\s+IN\s+WORDS|TOTAL\s+AMOUNT|NET\s+AMOUNT/i.test(joinedText);
+
+    if (hasReturnTo && (hasPickup || hasCourier || hasBarcodeLikeContent)) {
+        return true;
+    }
+
+    if (upperText.includes('MEESHO') && (hasPickup || hasCourier || hasShippingContext || hasBarcodeLikeContent)) {
+        return true;
+    }
+
+    if (hasBarcodeLikeContent && (hasPickup || hasCourier || hasShippingContext) && !hasInvoiceHeavyMarkers) {
+        return true;
+    }
+
+    return false;
+}
+
+async function addFullPageScaledToThermal(outputPdf, srcPage) {
+    const embeddedPage = await outputPdf.embedPage(srcPage);
+    const { width: srcW, height: srcH } = srcPage.getSize();
+    const outPage = outputPdf.addPage([288, 432]);
+    const scale = Math.min(288 / srcW, 432 / srcH);
+    const drawW = srcW * scale;
+    const drawH = srcH * scale;
+
+    outPage.drawPage(embeddedPage, {
+        x: (288 - drawW) / 2,
+        y: (432 - drawH) / 2,
+        width: drawW,
+        height: drawH,
+    });
+
+    return outPage;
+}
+
 // ==================================================================
 // PDF LAYOUT TRANSFORMATION FUNCTIONS
 // ==================================================================
@@ -5257,7 +5307,15 @@ async function processMeeshoBucket(bucket) {
 
                 // Case-sensitive anchor: process only pages containing exact "TAX INVOICE"
                 if (!joinedText.includes('TAX INVOICE')) {
-                    console.log(`[Meesho] Skipping page ${p + 1} of ${item.name} - TAX INVOICE not found (case-sensitive)`);
+                    if (isLikelyStandaloneMeeshoLabelPage(textItems)) {
+                        labelNumber++;
+                        await addFullPageScaledToThermal(outputPdf, srcPage);
+                        totalPages += 1;
+                        console.log(`[Meesho] Included label-only page ${p + 1} of ${item.name} without invoice crop/rotation`);
+                        continue;
+                    }
+
+                    console.log(`[Meesho] Skipping page ${p + 1} of ${item.name} - TAX INVOICE not found and page does not look like a standalone label`);
                     continue;
                 }
 
@@ -5444,6 +5502,11 @@ async function processMeeshoBucket(bucket) {
 
                 totalPages += 2;
             }
+        }
+
+        if (labelNumber === 0 || outputPdf.getPageCount() === 0) {
+            console.log(`[Meesho] No valid output pages generated for seller ${sellerId}`);
+            continue;
         }
 
         const pdfBytes = await outputPdf.save();
