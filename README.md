@@ -1,6 +1,6 @@
-# JB Creations - Shipping Label Sorter
+# JB Creations - Shipping Label Tools
 
-A web application to automatically sort shipping labels from Flipkart, Amazon, and Meesho based on priority codes.
+A desktop-capable label toolkit for sorting, cropping, counting, finding, and SKU to new3 automation for Flipkart, Amazon, and Meesho workflows.
 
 ## Features
 
@@ -10,8 +10,46 @@ A web application to automatically sort shipping labels from Flipkart, Amazon, a
 - ⬇️ **Sorted Output**: Downloads a single PDF with priority labels at the beginning
 - 🎨 **Beautiful UI**: Modern, responsive design that works on all devices
 - 🏷️ **Platform Support**: Supports Flipkart, Amazon, and Meesho labels
+- 📦 **SKU To New3 Automation**: Desktop-only workflow that ports the attached Python process into the app
+
+## SKU To New3 Automation
+
+The new tab is designed for the Windows desktop build of the app and mirrors the Python workflow:
+
+- Drag and drop or browse `.xlsx`, `.xls`, `.csv`, and `.txt` order files
+- Or scan a configured source folder for files modified today
+- Extract SKUs using configurable column aliases
+- Apply Meesho filtering by `Reason for Credit Entry` values
+- Write combined SKUs to the `ORDERS` tab in Google Sheets using a stored service account JSON
+- Wait for pivot refresh and export `STOCK ANALYSIS!C:D` to the configured `sku.csv`
+- Clear the configured `new3` folder
+- Copy SKU-named PDFs from a source PDF folder into `new3` using the exported quantity values
+- Show per-platform counts, moved/skipped files, missing SKUs, and a detailed log
+
+Settings editing is password-protected with `200274`. The desktop profile stores the imported Google service account JSON so the workflow can be restored after reinstalling the app.
 
 ## How to Use
+
+1. Install dependencies with `npm install`
+2. Start the Windows desktop app with `npm start`
+3. Open the `SKU To New3 Automation` tab in the desktop app for the local automation workflow
+4. Import your Google service account JSON from the tab
+5. Unlock settings with password `200274` and configure your source, archive, CSV, and destination paths
+6. Choose manual files or folder-scan mode
+7. Click `Run SKU Automation`
+
+For the PDF-only browser features, you can still open `index.html` directly, but the local folder automation requires the Electron desktop runtime.
+
+## Desktop Runtime
+
+This project now runs as an Electron app so the UI can keep its website-style workflow while still accessing local folders, files, and Google credentials.
+
+- `npm start`: launch the desktop app locally
+- `npm run build:win`: build a Windows portable package
+
+The Netlify site can still act as the recovery/download page, but the SKU automation flow itself runs through the desktop build.
+
+## Existing Label Tools
 
 1. Open `index.html` in your web browser
 2. (Optional) Select your platform (Flipkart/Amazon/Meesho) for custom cropping logic
@@ -64,10 +102,16 @@ flipkart: {
 
 ```
 jbcreationslabels/
-├── index.html      # Main HTML file
-├── styles.css      # Styling
-├── script.js       # Application logic
-└── README.md       # This file
+├── index.html                 # Main renderer HTML
+├── styles.css                 # Styling
+├── script.js                  # Renderer logic for all tabs
+├── src/
+│   ├── main.js                # Electron main process
+│   ├── preload.js             # Safe desktop bridge for the renderer
+│   └── sku-automation/
+│       ├── config-store.js    # Desktop profile settings and JSON import
+│       └── local-automation.js# Python-parity SKU automation logic
+└── README.md                  # This file
 ```
 
 ## Browser Compatibility
@@ -79,8 +123,8 @@ jbcreationslabels/
 
 ## Notes
 
-- The application runs entirely in the browser (no server required)
-- Your files are processed locally and never uploaded to any server
+- The PDF tools still work in the browser, but the SKU automation tab requires the Electron desktop build
+- Files are processed locally and never sent through a custom backend server
 - Supports multiple PDF files at once
 - Maintains original page quality
 

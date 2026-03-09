@@ -237,6 +237,9 @@ let finderCapturedForBatch = false; // Track finder capture state for current pr
 let currentProcessedBatchToken = '';
 let lastFinderCapturedBatchToken = '';
 let latestSortedPdfName = '';
+let skuAutomationSettingsUnlocked = false;
+let skuAutomationSettings = null;
+let skuAutomationSelectedFiles = [];
 
 // Label Counter specific variables
 let counterUploadedFiles = [];
@@ -393,6 +396,7 @@ function startApplicationOnce() {
     hasAppStarted = true;
     initializeApp();
     initCroppingTab();
+    initSkuAutomationTab();
 }
 
 function isDeviceAuthorized() {
@@ -466,7 +470,7 @@ function initializeApp() {
     
     // Restore active tab from localStorage
     const savedTab = localStorage.getItem('activeTab');
-    if (savedTab && (savedTab === 'sorting' || savedTab === 'counter' || savedTab === 'cropping' || savedTab === 'finder')) {
+    if (savedTab && (savedTab === 'sorting' || savedTab === 'counter' || savedTab === 'cropping' || savedTab === 'finder' || savedTab === 'sku-automation')) {
         switchTab(savedTab);
     }
     
@@ -2628,6 +2632,8 @@ function showPasswordModal(action) {
             messageEl.textContent = 'Enter password to configure label detection settings';
         } else if (action === 'finderDelete') {
             messageEl.textContent = 'Enter password to delete this history file';
+        } else if (action === 'skuAutomationSettings') {
+            messageEl.textContent = 'Enter password to unlock SKU automation settings';
         }
     }
     
@@ -2654,6 +2660,9 @@ async function checkPassword() {
             showLabelCriteriaModal();
         } else if (pendingPasswordAction === 'finderDelete') {
             await confirmFinderHistoryDelete();
+        } else if (pendingPasswordAction === 'skuAutomationSettings') {
+            skuAutomationSettingsUnlocked = true;
+            updateSkuAutomationSettingsLock();
         }
         pendingPasswordAction = null;
     } else {
@@ -4493,6 +4502,449 @@ async function processCroppingAutomatic(fileDataArray) {
     }
 
     updateCroppingProgress(100, '✅ Processing complete!');
+}
+
+const SKU_AUTOMATION_DEFAULT_SETTINGS = {
+    baseSourceFolder: '',
+    processedFolder: '',
+    sourcePdfFolder: '',
+    folderToClear: '',
+    skuCsvPath: '',
+    googleSheetName: 'order wali sheet',
+    ordersTabName: 'ORDERS',
+    stockAnalysisTabName: 'STOCK ANALYSIS',
+    waitTimeForPivotSeconds: 5,
+    possibleSkuColumnNames: ['sku', 'product id', 'item code', 'seller sku', 'order item sku'],
+    meeshoCreditEntryColumn: 'Reason for Credit Entry',
+    meeshoFilterReasons: ['PENDING', 'HOLD'],
+    serviceAccount: {
+        isImported: false,
+        clientEmail: '',
+        projectId: '',
+    },
+};
+
+function getSkuAutomationElements() {
+    return {
+        banner: document.getElementById('skuAutomationDesktopBanner'),
+        unlockBtn: document.getElementById('skuAutomationUnlockBtn'),
+        saveSettingsBtn: document.getElementById('skuAutomationSaveSettingsBtn'),
+        importSettingsBtn: document.getElementById('skuAutomationImportSettingsBtn'),
+        exportSettingsBtn: document.getElementById('skuAutomationExportSettingsBtn'),
+        importServiceAccountBtn: document.getElementById('skuAutomationImportServiceAccountBtn'),
+        uploadArea: document.getElementById('skuAutomationUploadArea'),
+        fileInput: document.getElementById('skuAutomationFileInput'),
+        browseFilesBtn: document.getElementById('skuAutomationBrowseFilesBtn'),
+        clearFilesBtn: document.getElementById('skuAutomationClearFilesBtn'),
+        manualFilesList: document.getElementById('skuAutomationManualFilesList'),
+        modeSelect: document.getElementById('skuAutomationMode'),
+        runBtn: document.getElementById('skuAutomationRunBtn'),
+        statusText: document.getElementById('skuAutomationStatusText'),
+        logOutput: document.getElementById('skuAutomationLog'),
+        movedFiles: document.getElementById('skuAutomationMovedFiles'),
+        skippedFiles: document.getElementById('skuAutomationSkippedFiles'),
+        missingSkus: document.getElementById('skuAutomationMissingSkus'),
+        meeshoCount: document.getElementById('skuAutomationMeeshoCount'),
+        flipkartCount: document.getElementById('skuAutomationFlipkartCount'),
+        amazonCount: document.getElementById('skuAutomationAmazonCount'),
+        totalCount: document.getElementById('skuAutomationTotalCount'),
+        baseSourceFolder: document.getElementById('skuAutomationBaseSourceFolder'),
+        processedFolder: document.getElementById('skuAutomationProcessedFolder'),
+        sourcePdfFolder: document.getElementById('skuAutomationSourcePdfFolder'),
+        folderToClear: document.getElementById('skuAutomationFolderToClear'),
+        skuCsvPath: document.getElementById('skuAutomationSkuCsvPath'),
+        googleSheetName: document.getElementById('skuAutomationGoogleSheetName'),
+        ordersTabName: document.getElementById('skuAutomationOrdersTabName'),
+        stockAnalysisTabName: document.getElementById('skuAutomationStockAnalysisTabName'),
+        waitTime: document.getElementById('skuAutomationWaitTime'),
+        possibleSkuColumns: document.getElementById('skuAutomationPossibleSkuColumns'),
+        meeshoCreditEntryColumn: document.getElementById('skuAutomationMeeshoCreditEntryColumn'),
+        meeshoFilterReasons: document.getElementById('skuAutomationMeeshoFilterReasons'),
+        serviceAccountStatus: document.getElementById('skuAutomationServiceAccountStatus'),
+        browseButtons: Array.from(document.querySelectorAll('.sku-automation-browse-btn')),
+    };
+}
+
+function isDesktopAutomationAvailable() {
+    return typeof window.desktopAPI !== 'undefined';
+}
+
+function normalizeSkuAutomationList(value) {
+    if (Array.isArray(value)) {
+        return value.map(item => String(item).trim()).filter(Boolean);
+    }
+
+    return String(value || '')
+        .split(',')
+        .map(item => item.trim())
+        .filter(Boolean);
+}
+
+function updateSkuAutomationStatus(message) {
+    const el = getSkuAutomationElements();
+    if (el.statusText) {
+        el.statusText.textContent = message;
+    }
+}
+
+function setSkuAutomationLog(lines) {
+    const el = getSkuAutomationElements();
+    if (el.logOutput) {
+        el.logOutput.textContent = Array.isArray(lines) ? lines.join('\n') : String(lines || '');
+    }
+}
+
+function renderSkuAutomationResultList(container, items, formatter) {
+    if (!container) return;
+    if (!items || items.length === 0) {
+        container.innerHTML = '<div class="sku-automation-result-item muted">None</div>';
+        return;
+    }
+
+    container.innerHTML = items.map(item => `<div class="sku-automation-result-item">${formatter(item)}</div>`).join('');
+}
+
+function renderSkuAutomationFileList() {
+    const el = getSkuAutomationElements();
+    if (!el.manualFilesList) return;
+
+    if (skuAutomationSelectedFiles.length === 0) {
+        el.manualFilesList.innerHTML = '<div class="sku-automation-result-item muted">No manual files selected.</div>';
+        return;
+    }
+
+    el.manualFilesList.innerHTML = skuAutomationSelectedFiles.map(file => `
+        <div class="sku-automation-file-item">
+            <span>${file.name}</span>
+            <span>${file.path}</span>
+        </div>
+    `).join('');
+}
+
+function fillSkuAutomationForm(settings) {
+    const el = getSkuAutomationElements();
+    skuAutomationSettings = {
+        ...SKU_AUTOMATION_DEFAULT_SETTINGS,
+        ...settings,
+        serviceAccount: {
+            ...SKU_AUTOMATION_DEFAULT_SETTINGS.serviceAccount,
+            ...(settings && settings.serviceAccount ? settings.serviceAccount : {}),
+        },
+    };
+
+    el.baseSourceFolder.value = skuAutomationSettings.baseSourceFolder || '';
+    el.processedFolder.value = skuAutomationSettings.processedFolder || '';
+    el.sourcePdfFolder.value = skuAutomationSettings.sourcePdfFolder || '';
+    el.folderToClear.value = skuAutomationSettings.folderToClear || '';
+    el.skuCsvPath.value = skuAutomationSettings.skuCsvPath || '';
+    el.googleSheetName.value = skuAutomationSettings.googleSheetName || '';
+    el.ordersTabName.value = skuAutomationSettings.ordersTabName || '';
+    el.stockAnalysisTabName.value = skuAutomationSettings.stockAnalysisTabName || '';
+    el.waitTime.value = skuAutomationSettings.waitTimeForPivotSeconds || 5;
+    el.possibleSkuColumns.value = normalizeSkuAutomationList(skuAutomationSettings.possibleSkuColumnNames).join(', ');
+    el.meeshoCreditEntryColumn.value = skuAutomationSettings.meeshoCreditEntryColumn || '';
+    el.meeshoFilterReasons.value = normalizeSkuAutomationList(skuAutomationSettings.meeshoFilterReasons).join(', ');
+
+    if (skuAutomationSettings.serviceAccount && skuAutomationSettings.serviceAccount.isImported) {
+        el.serviceAccountStatus.textContent = `Imported in desktop profile: ${skuAutomationSettings.serviceAccount.clientEmail || skuAutomationSettings.serviceAccount.fileName}`;
+    } else {
+        el.serviceAccountStatus.textContent = 'No service account JSON imported into the desktop profile yet.';
+    }
+}
+
+function collectSkuAutomationSettings() {
+    const el = getSkuAutomationElements();
+    return {
+        baseSourceFolder: el.baseSourceFolder.value.trim(),
+        processedFolder: el.processedFolder.value.trim(),
+        sourcePdfFolder: el.sourcePdfFolder.value.trim(),
+        folderToClear: el.folderToClear.value.trim(),
+        skuCsvPath: el.skuCsvPath.value.trim(),
+        googleSheetName: el.googleSheetName.value.trim(),
+        ordersTabName: el.ordersTabName.value.trim(),
+        stockAnalysisTabName: el.stockAnalysisTabName.value.trim(),
+        waitTimeForPivotSeconds: Number.parseInt(el.waitTime.value, 10) || 5,
+        possibleSkuColumnNames: normalizeSkuAutomationList(el.possibleSkuColumns.value),
+        meeshoCreditEntryColumn: el.meeshoCreditEntryColumn.value.trim(),
+        meeshoFilterReasons: normalizeSkuAutomationList(el.meeshoFilterReasons.value),
+    };
+}
+
+function updateSkuAutomationSettingsLock() {
+    const el = getSkuAutomationElements();
+    const editableInputs = [
+        el.baseSourceFolder,
+        el.processedFolder,
+        el.sourcePdfFolder,
+        el.folderToClear,
+        el.skuCsvPath,
+        el.googleSheetName,
+        el.ordersTabName,
+        el.stockAnalysisTabName,
+        el.waitTime,
+        el.possibleSkuColumns,
+        el.meeshoCreditEntryColumn,
+        el.meeshoFilterReasons,
+    ];
+
+    editableInputs.forEach(input => {
+        if (input) input.disabled = !skuAutomationSettingsUnlocked;
+    });
+    el.browseButtons.forEach(button => {
+        button.disabled = !skuAutomationSettingsUnlocked || !isDesktopAutomationAvailable();
+    });
+    if (el.saveSettingsBtn) el.saveSettingsBtn.disabled = !skuAutomationSettingsUnlocked || !isDesktopAutomationAvailable();
+    if (el.importSettingsBtn) el.importSettingsBtn.disabled = !skuAutomationSettingsUnlocked || !isDesktopAutomationAvailable();
+    if (el.importServiceAccountBtn) el.importServiceAccountBtn.disabled = !skuAutomationSettingsUnlocked || !isDesktopAutomationAvailable();
+    if (el.unlockBtn) {
+        el.unlockBtn.textContent = skuAutomationSettingsUnlocked ? '🔓 Settings Unlocked' : '🔒 Unlock Settings';
+    }
+}
+
+async function loadSkuAutomationSettings() {
+    const el = getSkuAutomationElements();
+    if (!isDesktopAutomationAvailable()) {
+        fillSkuAutomationForm(SKU_AUTOMATION_DEFAULT_SETTINGS);
+        updateSkuAutomationSettingsLock();
+        renderSkuAutomationFileList();
+        return;
+    }
+
+    try {
+        const settings = await window.desktopAPI.getSettings();
+        fillSkuAutomationForm(settings || SKU_AUTOMATION_DEFAULT_SETTINGS);
+        if (el.banner) {
+            el.banner.className = 'sku-automation-banner sku-automation-banner-success';
+            el.banner.textContent = 'Desktop app bridge detected. Local folder automation is available on this machine.';
+        }
+    } catch (error) {
+        console.error('Failed to load SKU automation settings:', error);
+        updateSkuAutomationStatus(`Could not load desktop settings: ${error.message}`);
+        fillSkuAutomationForm(SKU_AUTOMATION_DEFAULT_SETTINGS);
+    }
+
+    updateSkuAutomationSettingsLock();
+    renderSkuAutomationFileList();
+}
+
+async function saveSkuAutomationSettings() {
+    if (!isDesktopAutomationAvailable()) {
+        return;
+    }
+
+    const settings = collectSkuAutomationSettings();
+    await window.desktopAPI.saveSettings(settings);
+    await loadSkuAutomationSettings();
+    updateSkuAutomationStatus('SKU automation settings saved locally in the desktop profile.');
+}
+
+async function handleSkuAutomationBrowse(button) {
+    if (!isDesktopAutomationAvailable()) {
+        return;
+    }
+
+    const targetId = button.getAttribute('data-target');
+    const kind = button.getAttribute('data-kind');
+    const target = document.getElementById(targetId);
+    if (!target) return;
+
+    if (kind === 'directory') {
+        const folderPath = await window.desktopAPI.selectDirectory({ title: 'Select folder' });
+        if (folderPath) target.value = folderPath;
+        return;
+    }
+
+    if (kind === 'save-file') {
+        const filePath = await window.desktopAPI.selectSaveFile({
+            title: 'Choose SKU CSV output path',
+            defaultPath: 'sku.csv',
+            filters: [{ name: 'CSV', extensions: ['csv'] }],
+        });
+        if (filePath) {
+            target.value = filePath;
+        }
+    }
+}
+
+function extractDesktopFileMetadata(file) {
+    const filePath = file.path || file.webkitRelativePath || '';
+    return {
+        name: file.name,
+        path: filePath,
+    };
+}
+
+function handleSkuAutomationFiles(files) {
+    const supportedNames = /\.(xlsx|xls|csv|txt)$/i;
+    const incoming = files
+        .map(extractDesktopFileMetadata)
+        .filter(file => file.path && supportedNames.test(file.name));
+
+    const seen = new Set(skuAutomationSelectedFiles.map(file => file.path));
+    incoming.forEach(file => {
+        if (!seen.has(file.path)) {
+            skuAutomationSelectedFiles.push(file);
+            seen.add(file.path);
+        }
+    });
+    renderSkuAutomationFileList();
+    updateSkuAutomationStatus(`${skuAutomationSelectedFiles.length} manual order file(s) selected.`);
+}
+
+async function browseSkuAutomationFiles() {
+    if (!isDesktopAutomationAvailable()) {
+        return;
+    }
+
+    const paths = await window.desktopAPI.selectFiles({
+        title: 'Select order files',
+        filters: [{ name: 'Order files', extensions: ['xlsx', 'xls', 'csv', 'txt'] }],
+    });
+    handleSkuAutomationFiles(paths.map(filePath => ({ name: filePath.split(/[/\\]/).pop(), path: filePath })));
+}
+
+function clearSkuAutomationFiles() {
+    skuAutomationSelectedFiles = [];
+    const el = getSkuAutomationElements();
+    if (el.fileInput) {
+        el.fileInput.value = '';
+    }
+    renderSkuAutomationFileList();
+    updateSkuAutomationStatus('Manual file list cleared.');
+}
+
+function renderSkuAutomationResults(result) {
+    const el = getSkuAutomationElements();
+    el.meeshoCount.textContent = result.summary?.meesho || 0;
+    el.flipkartCount.textContent = result.summary?.flipkart || 0;
+    el.amazonCount.textContent = result.summary?.amazon || 0;
+    el.totalCount.textContent = result.summary?.total || 0;
+
+    renderSkuAutomationResultList(el.movedFiles, result.movedFiles, item => `${item.fileName} → ${item.destinationPath}`);
+    renderSkuAutomationResultList(
+        el.skippedFiles,
+        [...(result.skippedFiles || []), ...(result.failures || []).map(item => ({ fileName: item.fileName, reason: item.error }))],
+        item => `${item.fileName}: ${item.reason}`
+    );
+    renderSkuAutomationResultList(el.missingSkus, result.missingSkus || [], item => item);
+    setSkuAutomationLog(result.logs || []);
+}
+
+async function runSkuAutomationFromUI() {
+    if (!isDesktopAutomationAvailable()) {
+        updateSkuAutomationStatus('Desktop bridge not available. Open the Windows desktop build to run this workflow.');
+        return;
+    }
+
+    const el = getSkuAutomationElements();
+    const mode = el.modeSelect.value;
+    const settings = collectSkuAutomationSettings();
+
+    if (mode === 'manual' && skuAutomationSelectedFiles.length === 0) {
+        alert('Select at least one manual file or switch to folder scan mode.');
+        return;
+    }
+
+    el.runBtn.disabled = true;
+    updateSkuAutomationStatus('Running SKU automation. This can take a few seconds while Google Sheets refreshes.');
+    setSkuAutomationLog(['Starting run...']);
+
+    try {
+        await window.desktopAPI.saveSettings(settings);
+        const result = await window.desktopAPI.runSkuAutomation({
+            settings,
+            manualFilePaths: mode === 'manual' ? skuAutomationSelectedFiles.map(file => file.path) : [],
+        });
+        renderSkuAutomationResults(result);
+        updateSkuAutomationStatus('SKU automation finished. Review the logs and result lists below.');
+        fillSkuAutomationForm({ ...settings, serviceAccount: skuAutomationSettings?.serviceAccount || {} });
+    } catch (error) {
+        console.error('SKU automation failed:', error);
+        updateSkuAutomationStatus(`Run failed: ${error.message}`);
+        setSkuAutomationLog([`Run failed: ${error.message}`]);
+    } finally {
+        el.runBtn.disabled = false;
+    }
+}
+
+async function initSkuAutomationTab() {
+    const el = getSkuAutomationElements();
+    if (!el.uploadArea) return;
+
+    if (el.unlockBtn) {
+        el.unlockBtn.addEventListener('click', () => {
+            if (!skuAutomationSettingsUnlocked) {
+                showPasswordModal('skuAutomationSettings');
+            }
+        });
+    }
+
+    if (el.saveSettingsBtn) {
+        el.saveSettingsBtn.addEventListener('click', saveSkuAutomationSettings);
+    }
+    if (el.importSettingsBtn) {
+        el.importSettingsBtn.addEventListener('click', async () => {
+            if (!isDesktopAutomationAvailable()) return;
+            const imported = await window.desktopAPI.importSettings();
+            if (imported) {
+                await loadSkuAutomationSettings();
+                updateSkuAutomationStatus('Configuration imported into the desktop profile.');
+            }
+        });
+    }
+    if (el.exportSettingsBtn) {
+        el.exportSettingsBtn.addEventListener('click', async () => {
+            if (!isDesktopAutomationAvailable()) return;
+            const savedPath = await window.desktopAPI.exportSettings();
+            if (savedPath) {
+                updateSkuAutomationStatus(`Configuration exported to ${savedPath}.`);
+            }
+        });
+    }
+    if (el.importServiceAccountBtn) {
+        el.importServiceAccountBtn.addEventListener('click', async () => {
+            if (!isDesktopAutomationAvailable()) return;
+            const status = await window.desktopAPI.importServiceAccount();
+            if (status) {
+                fillSkuAutomationForm({ ...collectSkuAutomationSettings(), serviceAccount: status });
+                updateSkuAutomationStatus('Service account JSON imported into the desktop profile.');
+            }
+        });
+    }
+
+    el.browseButtons.forEach(button => {
+        button.addEventListener('click', () => handleSkuAutomationBrowse(button));
+    });
+
+    if (el.fileInput) {
+        el.fileInput.addEventListener('change', event => {
+            handleSkuAutomationFiles(Array.from(event.target.files || []));
+        });
+    }
+    if (el.browseFilesBtn) {
+        el.browseFilesBtn.addEventListener('click', browseSkuAutomationFiles);
+    }
+    if (el.clearFilesBtn) {
+        el.clearFilesBtn.addEventListener('click', clearSkuAutomationFiles);
+    }
+    if (el.runBtn) {
+        el.runBtn.addEventListener('click', runSkuAutomationFromUI);
+    }
+
+    el.uploadArea.addEventListener('dragover', event => {
+        event.preventDefault();
+        el.uploadArea.classList.add('dragover');
+    });
+    el.uploadArea.addEventListener('dragleave', () => {
+        el.uploadArea.classList.remove('dragover');
+    });
+    el.uploadArea.addEventListener('drop', event => {
+        event.preventDefault();
+        el.uploadArea.classList.remove('dragover');
+        handleSkuAutomationFiles(Array.from(event.dataTransfer.files || []));
+    });
+
+    await loadSkuAutomationSettings();
 }
 
 // ------------------------------------------------------------------

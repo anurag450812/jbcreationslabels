@@ -28,6 +28,9 @@
                 <button class="tab-btn" data-tab="finder" onclick="switchTab('finder')">
                     🔎 Label Finder
                 </button>
+                <button class="tab-btn" data-tab="sku-automation" onclick="switchTab('sku-automation')">
+                    📦 SKU To New3 Automation
+                </button>
             </nav>
         </header>
 
@@ -349,6 +352,200 @@
                 </section>
             </div>
             <!-- END FINDER TAB CONTENT -->
+
+            <!-- SKU AUTOMATION TAB CONTENT -->
+            <div id="sku-automation-tab-content" class="tab-content">
+                <section class="sku-automation-hero">
+                    <div class="results-card sku-automation-hero-card">
+                        <h3>📦 SKU To New3 Automation</h3>
+                        <p>Run the same local workflow as your Python script: read marketplace order files, push SKUs to Google Sheets, export STOCK ANALYSIS to sku.csv, clear new3, and rebuild the required PDF copies.</p>
+                        <div id="skuAutomationDesktopBanner" class="sku-automation-banner sku-automation-banner-warning">
+                            Desktop app bridge not detected. The Netlify site can be your recovery page, but this tab needs the Windows desktop app build to access folders and Google credentials locally.
+                        </div>
+                    </div>
+                </section>
+
+                <section class="sku-automation-config-section">
+                    <div class="results-card">
+                        <div class="sku-automation-section-header">
+                            <div>
+                                <h3>⚙️ Configuration</h3>
+                                <p>Editing paths is locked behind password 200274. Running the automation stays unlocked.</p>
+                            </div>
+                            <div class="button-group sku-automation-top-actions">
+                                <button class="btn btn-edit" id="skuAutomationUnlockBtn">🔒 Unlock Settings</button>
+                                <button class="btn btn-primary" id="skuAutomationSaveSettingsBtn" disabled>💾 Save Settings</button>
+                                <button class="btn btn-secondary" id="skuAutomationImportSettingsBtn" disabled>📥 Import Config</button>
+                                <button class="btn btn-success" id="skuAutomationExportSettingsBtn">📤 Export Config</button>
+                            </div>
+                        </div>
+
+                        <div class="sku-automation-grid">
+                            <label class="sku-automation-field">
+                                <span>Base Source Folder</span>
+                                <div class="sku-automation-input-row">
+                                    <input type="text" id="skuAutomationBaseSourceFolder" placeholder="Folder scan source path" disabled>
+                                    <button class="btn btn-primary sku-automation-browse-btn" data-target="skuAutomationBaseSourceFolder" data-kind="directory" disabled>Browse</button>
+                                </div>
+                            </label>
+
+                            <label class="sku-automation-field">
+                                <span>Processed Archive Folder</span>
+                                <div class="sku-automation-input-row">
+                                    <input type="text" id="skuAutomationProcessedFolder" placeholder="Archive folder for processed files" disabled>
+                                    <button class="btn btn-primary sku-automation-browse-btn" data-target="skuAutomationProcessedFolder" data-kind="directory" disabled>Browse</button>
+                                </div>
+                            </label>
+
+                            <label class="sku-automation-field">
+                                <span>Source PDF Folder</span>
+                                <div class="sku-automation-input-row">
+                                    <input type="text" id="skuAutomationSourcePdfFolder" placeholder="Folder containing SKU-named PDFs" disabled>
+                                    <button class="btn btn-primary sku-automation-browse-btn" data-target="skuAutomationSourcePdfFolder" data-kind="directory" disabled>Browse</button>
+                                </div>
+                            </label>
+
+                            <label class="sku-automation-field">
+                                <span>Destination New3 Folder</span>
+                                <div class="sku-automation-input-row">
+                                    <input type="text" id="skuAutomationFolderToClear" placeholder="Destination folder to clear and refill" disabled>
+                                    <button class="btn btn-primary sku-automation-browse-btn" data-target="skuAutomationFolderToClear" data-kind="directory" disabled>Browse</button>
+                                </div>
+                            </label>
+
+                            <label class="sku-automation-field">
+                                <span>SKU CSV Output Path</span>
+                                <div class="sku-automation-input-row">
+                                    <input type="text" id="skuAutomationSkuCsvPath" placeholder="e.g. D:\files\sku.csv" disabled>
+                                    <button class="btn btn-primary sku-automation-browse-btn" data-target="skuAutomationSkuCsvPath" data-kind="save-file" disabled>Browse</button>
+                                </div>
+                            </label>
+
+                            <label class="sku-automation-field">
+                                <span>Google Sheet Name</span>
+                                <input type="text" id="skuAutomationGoogleSheetName" placeholder="order wali sheet" disabled>
+                            </label>
+
+                            <label class="sku-automation-field">
+                                <span>Orders Tab Name</span>
+                                <input type="text" id="skuAutomationOrdersTabName" placeholder="ORDERS" disabled>
+                            </label>
+
+                            <label class="sku-automation-field">
+                                <span>Stock Analysis Tab Name</span>
+                                <input type="text" id="skuAutomationStockAnalysisTabName" placeholder="STOCK ANALYSIS" disabled>
+                            </label>
+
+                            <label class="sku-automation-field">
+                                <span>Pivot Wait Time Seconds</span>
+                                <input type="number" id="skuAutomationWaitTime" min="0" step="1" placeholder="5" disabled>
+                            </label>
+
+                            <label class="sku-automation-field sku-automation-field-wide">
+                                <span>Possible SKU Column Names</span>
+                                <textarea id="skuAutomationPossibleSkuColumns" rows="3" placeholder="sku, product id, item code, seller sku, order item sku" disabled></textarea>
+                            </label>
+
+                            <label class="sku-automation-field">
+                                <span>Meesho Credit Entry Column</span>
+                                <input type="text" id="skuAutomationMeeshoCreditEntryColumn" placeholder="Reason for Credit Entry" disabled>
+                            </label>
+
+                            <label class="sku-automation-field">
+                                <span>Meesho Filter Reasons</span>
+                                <input type="text" id="skuAutomationMeeshoFilterReasons" placeholder="PENDING, HOLD" disabled>
+                            </label>
+                        </div>
+
+                        <div class="sku-automation-service-account-row">
+                            <div>
+                                <h4>🔐 Google Service Account</h4>
+                                <p id="skuAutomationServiceAccountStatus">No service account JSON imported into the desktop profile yet.</p>
+                            </div>
+                            <button class="btn btn-primary" id="skuAutomationImportServiceAccountBtn" disabled>Import JSON</button>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="sku-automation-run-section">
+                    <div class="results-card">
+                        <div class="sku-automation-section-header">
+                            <div>
+                                <h3>🚀 Run Automation</h3>
+                                <p>Choose manual file mode or scan the configured source folder for today&apos;s files.</p>
+                            </div>
+                            <div class="sku-automation-run-controls">
+                                <select id="skuAutomationMode" class="sku-automation-select">
+                                    <option value="manual">Manual drag and drop files</option>
+                                    <option value="folder">Scan configured source folder</option>
+                                </select>
+                                <button class="btn btn-success" id="skuAutomationRunBtn">Run SKU Automation</button>
+                            </div>
+                        </div>
+
+                        <div class="upload-area sku-automation-upload-area" id="skuAutomationUploadArea">
+                            <div class="upload-icon">📂</div>
+                            <h2>Drop order files here</h2>
+                            <p>Supports .xlsx, .xls, .csv, and .txt for Amazon, Flipkart, and Meesho</p>
+                            <input type="file" id="skuAutomationFileInput" accept=".xlsx,.xls,.csv,.txt" multiple>
+                        </div>
+
+                        <div class="button-group sku-automation-file-actions">
+                            <button class="btn btn-primary" id="skuAutomationBrowseFilesBtn">Browse Files</button>
+                            <button class="btn btn-secondary" id="skuAutomationClearFilesBtn">Clear Manual Files</button>
+                        </div>
+
+                        <div class="sku-automation-file-list-wrap">
+                            <h4>Selected Manual Files</h4>
+                            <div id="skuAutomationManualFilesList" class="sku-automation-file-list"></div>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="sku-automation-status-section">
+                    <div class="results-card">
+                        <h3>📋 Run Status</h3>
+                        <p id="skuAutomationStatusText">Idle. Configure paths, import the service account JSON, then run the automation.</p>
+                        <div class="sku-automation-summary-grid">
+                            <div class="stat-item">
+                                <span class="stat-value" id="skuAutomationMeeshoCount">0</span>
+                                <span class="stat-label">Meesho SKUs</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-value" id="skuAutomationFlipkartCount">0</span>
+                                <span class="stat-label">Flipkart SKUs</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-value" id="skuAutomationAmazonCount">0</span>
+                                <span class="stat-label">Amazon SKUs</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-value" id="skuAutomationTotalCount">0</span>
+                                <span class="stat-label">Total SKUs</span>
+                            </div>
+                        </div>
+                        <div class="sku-automation-run-output">
+                            <div>
+                                <h4>Processed Files</h4>
+                                <div id="skuAutomationMovedFiles" class="sku-automation-result-list"></div>
+                            </div>
+                            <div>
+                                <h4>Skipped / Failed</h4>
+                                <div id="skuAutomationSkippedFiles" class="sku-automation-result-list"></div>
+                            </div>
+                            <div>
+                                <h4>Missing SKU PDFs</h4>
+                                <div id="skuAutomationMissingSkus" class="sku-automation-result-list"></div>
+                            </div>
+                        </div>
+                        <div class="sku-automation-log-wrap">
+                            <h4>Detailed Log</h4>
+                            <pre id="skuAutomationLog" class="counter-text-output"></pre>
+                        </div>
+                    </div>
+                </section>
+            </div>
+            <!-- END SKU AUTOMATION TAB CONTENT -->
 
             <!-- Password Modal -->
             <div class="modal" id="passwordModal" style="display: none;">
