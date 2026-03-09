@@ -113,7 +113,9 @@ section {
     font-size: 1rem;
 }
 
-#fileInput {
+#fileInput,
+#counterFileInput,
+#croppingFileInput {
     position: absolute;
     width: 100%;
     height: 100%;
@@ -794,6 +796,22 @@ footer {
     flex: initial;
 }
 
+.sku-automation-settings-actions {
+    margin-bottom: 18px;
+}
+
+.sku-automation-locked-notice {
+    padding: 16px 18px;
+    border: 1px dashed var(--border-color);
+    border-radius: 12px;
+    background: #f8fafc;
+    color: var(--text-secondary);
+}
+
+.sku-automation-settings-panel[hidden] {
+    display: none;
+}
+
 .sku-automation-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -863,15 +881,6 @@ footer {
 
 .sku-automation-upload-area {
     margin-bottom: 16px;
-}
-
-#skuAutomationFileInput {
-    position: absolute;
-    width: 100%;
-    height: 100%;
-    inset: 0;
-    opacity: 0;
-    cursor: pointer;
 }
 
 .sku-automation-file-list-wrap,

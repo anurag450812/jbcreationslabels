@@ -9,7 +9,7 @@ const {
     importServiceAccountKey,
     getServiceAccountStatus,
 } = require('./sku-automation/config-store');
-const { runSkuAutomation } = require('./sku-automation/local-automation');
+const { runSkuAutomation, scanConfiguredSourceFiles } = require('./sku-automation/local-automation');
 
 const APP_ID = 'com.jbcreations.labels';
 
@@ -128,6 +128,11 @@ function createWindow() {
         mainWindow = null;
     });
 
+    mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    mainWindow.webContents.on('will-navigate', event => {
+        event.preventDefault();
+    });
+
     mainWindow.loadFile(path.join(__dirname, '..', 'index.html'));
 }
 
@@ -244,4 +249,8 @@ ipcMain.handle('desktop:import-service-account', async () => {
 
 ipcMain.handle('desktop:run-sku-automation', async (_event, payload) => {
     return runSkuAutomation(app, payload);
+});
+
+ipcMain.handle('desktop:scan-source-files', async (_event, payload) => {
+    return scanConfiguredSourceFiles(app, payload);
 });

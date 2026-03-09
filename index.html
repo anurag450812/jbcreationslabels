@@ -28,7 +28,7 @@
                 <button class="tab-btn" data-tab="finder" onclick="switchTab('finder')">
                     🔎 Label Finder
                 </button>
-                <button class="tab-btn" data-tab="sku-automation" onclick="switchTab('sku-automation')">
+                <button class="tab-btn" id="skuAutomationTabBtn" data-tab="sku-automation" onclick="switchTab('sku-automation')">
                     📦 SKU To New3 Automation
                 </button>
             </nav>
@@ -370,15 +370,23 @@
                         <div class="sku-automation-section-header">
                             <div>
                                 <h3>⚙️ Configuration</h3>
-                                <p>Editing paths is locked behind password 200274. Running the automation stays unlocked.</p>
+                                <p>Settings stay hidden until the unlock password is entered. Running the automation stays available.</p>
                             </div>
                             <div class="button-group sku-automation-top-actions">
                                 <button class="btn btn-edit" id="skuAutomationUnlockBtn">🔒 Unlock Settings</button>
-                                <button class="btn btn-primary" id="skuAutomationSaveSettingsBtn" disabled>💾 Save Settings</button>
-                                <button class="btn btn-secondary" id="skuAutomationImportSettingsBtn" disabled>📥 Import Config</button>
-                                <button class="btn btn-success" id="skuAutomationExportSettingsBtn">📤 Export Config</button>
                             </div>
                         </div>
+
+                        <div id="skuAutomationLockedNotice" class="sku-automation-locked-notice">
+                            Configuration details are hidden. Unlock settings to view folders, sheet names, and the desktop service-account controls.
+                        </div>
+
+                        <div id="skuAutomationSettingsPanel" class="sku-automation-settings-panel" hidden>
+                            <div class="button-group sku-automation-settings-actions">
+                                <button class="btn btn-primary" id="skuAutomationSaveSettingsBtn" disabled>💾 Save Settings</button>
+                                <button class="btn btn-secondary" id="skuAutomationImportSettingsBtn" disabled>📥 Import Config</button>
+                                <button class="btn btn-success" id="skuAutomationExportSettingsBtn" disabled>📤 Export Config</button>
+                            </div>
 
                         <div class="sku-automation-grid">
                             <label class="sku-automation-field">
@@ -460,9 +468,10 @@
                         <div class="sku-automation-service-account-row">
                             <div>
                                 <h4>🔐 Google Service Account</h4>
-                                <p id="skuAutomationServiceAccountStatus">No service account JSON imported into the desktop profile yet.</p>
+                                <p id="skuAutomationServiceAccountStatus">No desktop service account key imported yet.</p>
                             </div>
                             <button class="btn btn-primary" id="skuAutomationImportServiceAccountBtn" disabled>Import JSON</button>
+                        </div>
                         </div>
                     </div>
                 </section>
@@ -472,31 +481,20 @@
                         <div class="sku-automation-section-header">
                             <div>
                                 <h3>🚀 Run Automation</h3>
-                                <p>Choose manual file mode or scan the configured source folder for today&apos;s files.</p>
+                                <p>Scan the configured source folder and process only files in that folder root, without entering subfolders.</p>
                             </div>
                             <div class="sku-automation-run-controls">
-                                <select id="skuAutomationMode" class="sku-automation-select">
-                                    <option value="manual">Manual drag and drop files</option>
-                                    <option value="folder">Scan configured source folder</option>
-                                </select>
+                                <button class="btn btn-primary" id="skuAutomationScanFolderBtn">Scan Folder</button>
                                 <button class="btn btn-success" id="skuAutomationRunBtn">Run SKU Automation</button>
                             </div>
                         </div>
 
-                        <div class="upload-area sku-automation-upload-area" id="skuAutomationUploadArea">
-                            <div class="upload-icon">📂</div>
-                            <h2>Drop order files here</h2>
-                            <p>Supports .xlsx, .xls, .csv, and .txt for Amazon, Flipkart, and Meesho</p>
-                            <input type="file" id="skuAutomationFileInput" accept=".xlsx,.xls,.csv,.txt" multiple>
-                        </div>
-
                         <div class="button-group sku-automation-file-actions">
-                            <button class="btn btn-primary" id="skuAutomationBrowseFilesBtn">Browse Files</button>
-                            <button class="btn btn-secondary" id="skuAutomationClearFilesBtn">Clear Manual Files</button>
+                            <button class="btn btn-secondary" id="skuAutomationClearFilesBtn">Clear Scanned Files</button>
                         </div>
 
                         <div class="sku-automation-file-list-wrap">
-                            <h4>Selected Manual Files</h4>
+                            <h4>Files Ready To Process</h4>
                             <div id="skuAutomationManualFilesList" class="sku-automation-file-list"></div>
                         </div>
                     </div>
@@ -505,7 +503,7 @@
                 <section class="sku-automation-status-section">
                     <div class="results-card">
                         <h3>📋 Run Status</h3>
-                        <p id="skuAutomationStatusText">Idle. Configure paths, import the service account JSON, then run the automation.</p>
+                        <p id="skuAutomationStatusText">Idle. Scan the configured source folder and run the automation when ready.</p>
                         <div class="sku-automation-summary-grid">
                             <div class="stat-item">
                                 <span class="stat-value" id="skuAutomationMeeshoCount">0</span>

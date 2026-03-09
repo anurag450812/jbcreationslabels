@@ -28,6 +28,44 @@ function identifyFileType(filename) {
     return 'Unknown';
 }
 
+function getSupportedOrderExtensions() {
+    return new Set(['.xlsx', '.xls', '.csv', '.txt']);
+}
+
+async function scanSourceFolderFiles(baseSourceFolder) {
+    if (!baseSourceFolder) {
+        throw new Error('Base source folder is not configured.');
+    }
+
+    const supportedExtensions = getSupportedOrderExtensions();
+    const items = await fs.readdir(baseSourceFolder, { withFileTypes: true });
+    const files = [];
+
+    for (const item of items) {
+        if (!item.isFile()) {
+            continue;
+        }
+
+        const filePath = path.join(baseSourceFolder, item.name);
+        const extension = path.extname(item.name).toLowerCase();
+        if (!supportedExtensions.has(extension)) {
+            continue;
+        }
+
+        const stats = await fs.stat(filePath);
+        files.push({
+            name: item.name,
+            path: filePath,
+            type: identifyFileType(item.name),
+            modifiedAt: stats.mtime.toISOString(),
+            size: stats.size,
+        });
+    }
+
+    files.sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: 'base' }));
+    return files;
+}
+
 function normalizeStringArray(value, fallback) {
     if (Array.isArray(value)) {
         return value.map(item => String(item).trim()).filter(Boolean);
@@ -184,7 +222,7 @@ async function getFilesToProcess(payload, settings, logger) {
         throw new Error('Base source folder is not configured.');
     }
 
-    const supportedExtensions = new Set(['.xlsx', '.xls', '.csv', '.txt']);
+    const supportedExtensions = getSupportedOrderExtensions();
     const items = await fs.readdir(settings.baseSourceFolder, { withFileTypes: true });
     const today = new Date();
     const files = [];
@@ -485,6 +523,19 @@ async function buildNew3Copies(settings, csvRows, logger) {
     };
 }
 
+async function scanConfiguredSourceFiles(app, payload = {}) {
+    const settings = {
+        ...(await getAutomationSettings(app)),
+        ...(payload.settings || {}),
+    };
+
+    const files = await scanSourceFolderFiles(settings.baseSourceFolder);
+    return {
+        baseSourceFolder: settings.baseSourceFolder,
+        files,
+    };
+}
+
 async function runSkuAutomation(app, payload = {}) {
     const logger = createLogger();
     const settings = {
@@ -588,5 +639,6 @@ async function runSkuAutomation(app, payload = {}) {
 
 module.exports = {
     identifyFileType,
+    scanConfiguredSourceFiles,
     runSkuAutomation,
 };

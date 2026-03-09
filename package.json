@@ -21,6 +21,7 @@
       "package.json"
     ],
     "win": {
+      "requestedExecutionLevel": "asInvoker",
       "target": [
         "portable"
       ]

@@ -140,22 +140,14 @@ async function getServiceAccountStatus(app) {
     try {
         const filePath = getServiceAccountFilePath(app);
         const raw = await fs.readFile(filePath, 'utf8');
-        const json = JSON.parse(raw);
+        JSON.parse(raw);
         return {
             isImported: true,
-            fileName: SERVICE_ACCOUNT_FILE_NAME,
-            clientEmail: json.client_email || '',
-            projectId: json.project_id || '',
-            filePath,
         };
     } catch (error) {
         if (error.code === 'ENOENT') {
             return {
                 isImported: false,
-                fileName: '',
-                clientEmail: '',
-                projectId: '',
-                filePath: '',
             };
         }
 
