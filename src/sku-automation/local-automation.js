@@ -258,6 +258,45 @@ async function clearFolderContents(folderPath, logger) {
     return deleted;
 }
 
+function normalizeSkuKey(value) {
+    return String(value || '')
+        .trim()
+        .toLowerCase()
+        .replace(/\.pdf$/i, '')
+        .replace(/\s+/g, ' ');
+}
+
+function shouldSkipSkuRow(sku) {
+    return !normalizeSkuKey(sku);
+}
+
+async function collectPdfFiles(folderPath, pdfMap = new Map()) {
+    const items = await fs.readdir(folderPath, { withFileTypes: true });
+
+    for (const item of items) {
+        const itemPath = path.join(folderPath, item.name);
+
+        if (item.isDirectory()) {
+            await collectPdfFiles(itemPath, pdfMap);
+            continue;
+        }
+
+        if (!item.isFile() || path.extname(item.name).toLowerCase() !== '.pdf') {
+            continue;
+        }
+
+        const basename = path.basename(item.name, '.pdf');
+        const normalized = normalizeSkuKey(basename);
+        if (!normalized || pdfMap.has(normalized)) {
+            continue;
+        }
+
+        pdfMap.set(normalized, itemPath);
+    }
+
+    return pdfMap;
+}
+
 async function createGoogleClients(app) {
     const auth = new google.auth.GoogleAuth({
         keyFile: getServiceAccountFilePath(app),
@@ -399,21 +438,31 @@ async function buildNew3Copies(settings, csvRows, logger) {
 
     await ensureDirectory(settings.sourcePdfFolder);
     const missingSkus = [];
+    const missingSkuSet = new Set();
     const copiedFiles = [];
+    const pdfMap = await collectPdfFiles(settings.sourcePdfFolder);
+
+    logger.log(`Indexed ${pdfMap.size} PDF file(s) under ${settings.sourcePdfFolder}.`);
 
     for (let index = 1; index < csvRows.length; index += 1) {
         const row = csvRows[index] || [];
         const sku = String(row[0] || '').trim();
         const quantity = Number.parseInt(String(row[1] || '').trim(), 10);
 
-        if (!sku || Number.isNaN(quantity) || quantity <= 0) {
+        if (shouldSkipSkuRow(sku)) {
             continue;
         }
 
-        const sourceFile = path.join(settings.sourcePdfFolder, `${sku}.pdf`);
-        if (!await fileExists(sourceFile)) {
-            missingSkus.push(sku);
-            logger.log(`Missing SKU PDF: ${sourceFile}`);
+        if (Number.isNaN(quantity) || quantity <= 0) {
+            continue;
+        }
+
+        const sourceFile = pdfMap.get(normalizeSkuKey(sku));
+        if (!sourceFile) {
+            if (!missingSkuSet.has(sku)) {
+                missingSkuSet.add(sku);
+                missingSkus.push(sku);
+            }
             continue;
         }
 
@@ -424,6 +473,10 @@ async function buildNew3Copies(settings, csvRows, logger) {
         }
 
         logger.log(`Copied ${sku} ${quantity} time(s) into ${settings.folderToClear}.`);
+    }
+
+    if (missingSkus.length > 0) {
+        logger.log(`Missing SKU PDF(s): ${missingSkus.join(', ')}`);
     }
 
     return {

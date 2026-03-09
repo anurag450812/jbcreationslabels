@@ -6,7 +6,8 @@
   "scripts": {
     "start": "electron .",
     "desktop": "electron .",
-    "build:win": "electron-builder --win portable"
+    "build:win": "electron-builder --win portable",
+    "build:installer": "electron-builder --win nsis"
   },
   "build": {
     "appId": "com.jbcreations.labels",

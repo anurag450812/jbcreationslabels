@@ -16,6 +16,10 @@ npm-debug.log*
 # Dependencies
 node_modules/
 
+# Build output
+dist/
+dist-*/
+
 # Temporary files
 *.tmp
 temp/
