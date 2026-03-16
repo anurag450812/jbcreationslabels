@@ -89,8 +89,7 @@ let PRIORITY_LABELS = [
 ];
 
 // Password for editing
-const EDIT_PASSWORD = '200274';
-const CRITERIA_PASSWORD = '200274'; // Same password for criteria settings
+const PASSWORD_HASH = '324eb71224711aac2b97284a8451afb1092333f44f8ded50c0aa2d0a83a501cf';
 const DEVICE_AUTH_STORAGE_KEY = 'jb_device_authorized_v1';
 
 // Default Label Detection Criteria
@@ -237,6 +236,9 @@ let finderCapturedForBatch = false; // Track finder capture state for current pr
 let currentProcessedBatchToken = '';
 let lastFinderCapturedBatchToken = '';
 let latestSortedPdfName = '';
+let skuAutomationSettingsUnlocked = false;
+let skuAutomationSettings = null;
+let skuAutomationSelectedFiles = [];
 
 // Label Counter specific variables
 let counterUploadedFiles = [];
@@ -257,6 +259,71 @@ let finderPrintFrame = null;
 let finderPrintUrlToRevoke = null;
 let finderSelectedCourier = '';
 let hasAppStarted = false;
+
+function isDesktopApp() {
+    return typeof window.desktopAPI !== 'undefined';
+}
+
+function matchesFileExtension(fileName, pattern) {
+    return pattern.test(String(fileName || ''));
+}
+
+function isPdfLikeFile(file) {
+    const fileName = file?.name || file?.path || '';
+    const fileType = String(file?.type || '').toLowerCase();
+
+    return matchesFileExtension(fileName, /\.pdf$/i)
+        || fileType === 'application/pdf'
+        || fileType === 'application/x-pdf';
+}
+
+function isSupportedOrderFile(file) {
+    const fileName = file?.name || file?.path || '';
+    return matchesFileExtension(fileName, /\.(xlsx|xls|csv|txt)$/i);
+}
+
+function getDroppedFiles(dataTransfer, predicate) {
+    return Array.from(dataTransfer?.files || []).filter(file => predicate(file));
+}
+
+function updateUploadAreaCopy(uploadAreaElement, title, subtitle) {
+    if (!uploadAreaElement) return;
+
+    const titleElement = uploadAreaElement.querySelector('h2');
+    const subtitleElement = uploadAreaElement.querySelector('p');
+
+    if (titleElement) {
+        titleElement.textContent = title;
+    }
+
+    if (subtitleElement) {
+        subtitleElement.textContent = subtitle;
+    }
+}
+
+function setupDesktopWindowDropGuard() {
+    const preventWindowFileDrop = event => {
+        const dragTypes = Array.from(event.dataTransfer?.types || []);
+        if (!dragTypes.includes('Files')) {
+            return;
+        }
+
+        event.preventDefault();
+    };
+
+    window.addEventListener('dragover', preventWindowFileDrop);
+    window.addEventListener('drop', preventWindowFileDrop);
+}
+
+async function hashPassword(value) {
+    const encoder = new TextEncoder();
+    const digest = await crypto.subtle.digest('SHA-256', encoder.encode(String(value)));
+    return Array.from(new Uint8Array(digest)).map(byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+async function isValidPassword(value) {
+    return (await hashPassword(value)) === PASSWORD_HASH;
+}
 
 // Tab switching function
 function switchTab(tabName) {
@@ -393,6 +460,7 @@ function startApplicationOnce() {
     hasAppStarted = true;
     initializeApp();
     initCroppingTab();
+    initSkuAutomationTab();
 }
 
 function isDeviceAuthorized() {
@@ -439,10 +507,10 @@ function hideDeviceAccessModal() {
     }
 }
 
-function submitDeviceAccessCode() {
+async function submitDeviceAccessCode() {
     if (!deviceAuthInput) return;
 
-    if (deviceAuthInput.value === EDIT_PASSWORD) {
+    if (await isValidPassword(deviceAuthInput.value)) {
         authorizeThisDevice();
         hideDeviceAccessModal();
         setAppLockState(false);
@@ -457,7 +525,65 @@ function submitDeviceAccessCode() {
     deviceAuthInput.focus();
 }
 
+function configureDesktopSkuOnlyMode() {
+    if (!isDesktopApp()) {
+        return;
+    }
+
+    document.title = 'JB Creations - SKU To New3 Automation';
+
+    const headerTitle = document.querySelector('header h1');
+    const headerSubtitle = document.querySelector('header > p');
+
+    if (headerTitle) {
+        headerTitle.textContent = '📦 JB Creations - SKU To New3 Automation';
+    }
+
+    if (headerSubtitle) {
+        headerSubtitle.textContent = 'Desktop app mode: only the SKU To New3 workflow is available here. Label sorting, counter, cropping, and finder stay on the website.';
+    }
+
+    document.querySelectorAll('.tab-btn').forEach(button => {
+        const isSkuTab = button.dataset.tab === 'sku-automation';
+        button.style.display = isSkuTab ? '' : 'none';
+        button.classList.toggle('active', isSkuTab);
+    });
+
+    document.querySelectorAll('.tab-content').forEach(content => {
+        const isSkuContent = content.id === 'sku-automation-tab-content';
+        content.style.display = isSkuContent ? 'block' : 'none';
+        content.classList.toggle('active', isSkuContent);
+    });
+
+    localStorage.setItem('activeTab', 'sku-automation');
+}
+
+function configureWebsiteMode() {
+    if (isDesktopApp()) {
+        return;
+    }
+
+    const skuTabButton = document.getElementById('skuAutomationTabBtn');
+    const skuTabContent = document.getElementById('sku-automation-tab-content');
+
+    if (skuTabButton) {
+        skuTabButton.remove();
+    }
+
+    if (skuTabContent) {
+        skuTabContent.remove();
+    }
+
+    if (localStorage.getItem('activeTab') === 'sku-automation') {
+        localStorage.setItem('activeTab', 'sorting');
+    }
+}
+
 function initializeApp() {
+    setupDesktopWindowDropGuard();
+    configureWebsiteMode();
+    configureDesktopSkuOnlyMode();
+
     // Display priority list (with default labels first)
     displayPriorityList();
     
@@ -465,8 +591,8 @@ function initializeApp() {
     setupEventListeners();
     
     // Restore active tab from localStorage
-    const savedTab = localStorage.getItem('activeTab');
-    if (savedTab && (savedTab === 'sorting' || savedTab === 'counter' || savedTab === 'cropping' || savedTab === 'finder')) {
+    const savedTab = isDesktopApp() ? 'sku-automation' : localStorage.getItem('activeTab');
+    if (savedTab && (savedTab === 'sorting' || savedTab === 'counter' || savedTab === 'cropping' || savedTab === 'finder' || savedTab === 'sku-automation')) {
         switchTab(savedTab);
     }
     
@@ -682,7 +808,7 @@ function setupEventListeners() {
     uploadArea.addEventListener('drop', (e) => {
         e.preventDefault();
         uploadArea.classList.remove('dragover');
-        const files = Array.from(e.dataTransfer.files).filter(f => f.type === 'application/pdf');
+        const files = getDroppedFiles(e.dataTransfer, isPdfLikeFile);
         if (files.length > 0) {
             handleFiles(files);
         }
@@ -770,7 +896,7 @@ function setupEventListeners() {
     counterUploadArea.addEventListener('drop', (e) => {
         e.preventDefault();
         counterUploadArea.classList.remove('dragover');
-        const files = Array.from(e.dataTransfer.files).filter(f => f.type === 'application/pdf');
+        const files = getDroppedFiles(e.dataTransfer, isPdfLikeFile);
         if (files.length > 0) {
             handleCounterFiles(files);
         }
@@ -2017,23 +2143,21 @@ async function extractPagesFromPDF(file) {
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
     const pages = [];
     
-    // Detect platform from filename as fallback
-    const filenamePlatform = detectPlatformFromFilename(file.name);
-    
     for (let i = 1; i <= pdf.numPages; i++) {
         const page = await pdf.getPage(i);
         const textContent = await page.getTextContent();
+        const rawItems = textContent.items;
         
         // Extract text with rotation support (handles 90°, 180°, 270° rotated labels)
         const textVariants = extractTextWithRotationSupport(textContent);
+        const isBarcodeLabel = hasBarcodeLikeContentForCounter(textVariants, rawItems);
         
         // Detect platform from text content trying all rotation variants
         // Pass raw items for item-level fallback detection (handles rotated labels)
-        const rawItems = textContent.items;
         const textDetection = detectPlatformFromTextMulti(textVariants, rawItems);
-        
-        // Use text-based detection if available, otherwise use filename
-        const platform = textDetection.platform !== 'unknown' ? textDetection.platform : filenamePlatform;
+
+        // Only page-level detection determines label platform. Non-detected pages stay unknown.
+        const platform = textDetection.platform;
         const subGroup = textDetection.subGroup;
         
         // Combine all text variants for priority label search (handles rotated text)
@@ -2043,6 +2167,7 @@ async function extractPagesFromPDF(file) {
             fileName: file.name,
             pageNumber: i,
             text: combinedText.toLowerCase(),
+            isBarcodeLabel,
             platform: platform,
             subGroup: subGroup,  // Store sub-group info (XID, JBCREATIONS, seller name, etc.)
             fileRef: file  // Store file reference instead of ArrayBuffer
@@ -2050,14 +2175,6 @@ async function extractPagesFromPDF(file) {
     }
     
     return pages;
-}
-
-function detectPlatformFromFilename(filename) {
-    const name = filename.toLowerCase();
-    if (name.includes('flipkart')) return 'flipkart';
-    if (name.includes('amazon')) return 'amazon';
-    if (name.includes('meesho')) return 'meesho';
-    return 'unknown';
 }
 
 /**
@@ -2157,9 +2274,10 @@ function sortPages(pages) {
 
     for (const order of pageOrders) {
         const page = order.labelPage;
+        const isCountableLabelPage = isSorterLabelPage(page);
 
         // Only barcode-identified label pages participate in label matching/counting stats
-        if (!order.isBarcodeLabel) {
+        if (!isCountableLabelPage) {
             otherOrders.push(order);
             continue;
         }
@@ -2214,7 +2332,7 @@ function sortPages(pages) {
     }
 
     const labelStatPages = pageOrders
-        .filter(order => order.isBarcodeLabel)
+        .filter(order => isSorterLabelPage(order.labelPage))
         .map(order => order.labelPage);
     
     // Filter to only labels that were found
@@ -2261,6 +2379,22 @@ function hasBarcodeLikeTextForSorter(text) {
     return false;
 }
 
+function isBarcodeLabelPageForSorter(page) {
+    if (page && typeof page.isBarcodeLabel === 'boolean') {
+        return page.isBarcodeLabel;
+    }
+
+    return hasBarcodeLikeTextForSorter(page && typeof page.text === 'string' ? page.text : '');
+}
+
+function isRecognizedSorterPlatform(platform) {
+    return platform === 'flipkart' || platform === 'meesho' || platform === 'amazon';
+}
+
+function isSorterLabelPage(page) {
+    return isBarcodeLabelPageForSorter(page) && isRecognizedSorterPlatform(page && page.platform);
+}
+
 function hasBarcodeLikeContentForCounter(textVariants, rawItems) {
     const variants = Array.isArray(textVariants) ? textVariants : [];
     const combinedText = variants.join(' ');
@@ -2297,6 +2431,7 @@ function hasBarcodeLikeContentForCounter(textVariants, rawItems) {
         /SHIPPING|DELIVERY|PICKUP|SOLD\s*BY|RETURN\s+TO|SHIP\s+TO|CUSTOMER\s+ADDRESS|AWB\s*NO/i.test(combinedText);
 
     if (hasStrongBarcodeKeywords || hasStarWrappedBarcode) {
+        if (hasInvoiceHeavyMarkers && !hasShippingLabelMarkers) return false;
         return true;
     }
 
@@ -2316,7 +2451,6 @@ function hasBarcodeLikeContentForCounter(textVariants, rawItems) {
 
 function buildPageOrdersByAdjacency(pages) {
     const orders = [];
-    const usedKeys = new Set();
 
     // Group by source file first
     const byFile = new Map();
@@ -2330,41 +2464,20 @@ function buildPageOrdersByAdjacency(pages) {
 
         for (let i = 0; i < filePages.length; i++) {
             const currentPage = filePages[i];
-            const currentKey = `${currentPage.fileName}::${currentPage.pageNumber}`;
-            if (usedKeys.has(currentKey)) continue;
-
-            const isLabelPage = hasBarcodeLikeTextForSorter(currentPage.text || '');
+            const isLabelPage = isSorterLabelPage(currentPage);
             if (!isLabelPage) continue;
 
             const nextPage = filePages[i + 1];
             if (nextPage) {
-                const nextKey = `${nextPage.fileName}::${nextPage.pageNumber}`;
-                if (!usedKeys.has(nextKey)) {
+                const nextPageIsBarcodeLabel = isSorterLabelPage(nextPage);
+                if (!nextPageIsBarcodeLabel) {
                     orders.push({ labelPage: currentPage, invoicePages: [nextPage], isBarcodeLabel: true });
-                    usedKeys.add(currentKey);
-                    usedKeys.add(nextKey);
-                    i++; // skip the paired next page
                     continue;
                 }
             }
 
             // Label page exists but no available immediate next page to pair
             orders.push({ labelPage: currentPage, invoicePages: [], isBarcodeLabel: true });
-            usedKeys.add(currentKey);
-        }
-    }
-
-    // Add any unpaired pages as standalone orders (keeps all pages in output)
-    const remainingPages = [...pages].sort((a, b) => {
-        if (a.fileName === b.fileName) return a.pageNumber - b.pageNumber;
-        return a.fileName.localeCompare(b.fileName);
-    });
-
-    for (const page of remainingPages) {
-        const key = `${page.fileName}::${page.pageNumber}`;
-        if (!usedKeys.has(key)) {
-            orders.push({ labelPage: page, invoicePages: [], isBarcodeLabel: false });
-            usedKeys.add(key);
         }
     }
 
@@ -2423,10 +2536,18 @@ async function createSortedPDF(sortedPages, originalFiles) {
 }
 
 function displayResults(total, matched, unmatched, labels, allPages, labelCounts = {}) {
+    const barcodeLabelPages = (Array.isArray(allPages) ? allPages : []).filter(
+        page => isSorterLabelPage(page)
+    );
+    const matchedLabelCountFromLabels = Object.values(labelCounts).reduce((sum, count) => sum + (Number(count) || 0), 0);
+    const totalBarcodeLabelCount = barcodeLabelPages.length;
+    const matchedBarcodeLabelCount = Math.min(totalBarcodeLabelCount, matchedLabelCountFromLabels || matched || 0);
+    const unmatchedBarcodeLabelCount = Math.max(0, totalBarcodeLabelCount - matchedBarcodeLabelCount);
+
     // Update stats
-    document.getElementById('totalPages').textContent = total;
-    document.getElementById('matchedPages').textContent = matched;
-    document.getElementById('unmatchedPages').textContent = unmatched;
+    document.getElementById('totalPages').textContent = totalBarcodeLabelCount;
+    document.getElementById('matchedPages').textContent = matchedBarcodeLabelCount;
+    document.getElementById('unmatchedPages').textContent = unmatchedBarcodeLabelCount;
     
     // Calculate comprehensive platform breakdown with sub-groups
     const platformCounts = {
@@ -2442,7 +2563,7 @@ function displayResults(total, matched, unmatched, labels, allPages, labelCounts
         amazon: {}
     };
     
-    allPages.forEach(page => {
+    barcodeLabelPages.forEach(page => {
         if (platformCounts.hasOwnProperty(page.platform)) {
             platformCounts[page.platform]++;
             
@@ -2628,6 +2749,8 @@ function showPasswordModal(action) {
             messageEl.textContent = 'Enter password to configure label detection settings';
         } else if (action === 'finderDelete') {
             messageEl.textContent = 'Enter password to delete this history file';
+        } else if (action === 'skuAutomationSettings') {
+            messageEl.textContent = 'Enter password to unlock SKU automation settings';
         }
     }
     
@@ -2643,7 +2766,7 @@ function hidePasswordModal() {
 async function checkPassword() {
     const enteredPassword = passwordInput.value;
     
-    if (enteredPassword === EDIT_PASSWORD) {
+    if (await isValidPassword(enteredPassword)) {
         hidePasswordModal();
         // Execute the pending action based on what was requested
         if (pendingPasswordAction === 'editLabels') {
@@ -2654,6 +2777,9 @@ async function checkPassword() {
             showLabelCriteriaModal();
         } else if (pendingPasswordAction === 'finderDelete') {
             await confirmFinderHistoryDelete();
+        } else if (pendingPasswordAction === 'skuAutomationSettings') {
+            skuAutomationSettingsUnlocked = true;
+            updateSkuAutomationSettingsLock();
         }
         pendingPasswordAction = null;
     } else {
@@ -3553,7 +3679,18 @@ async function extractTrackingsFromSortedPdf(pdfBytes) {
 
         const candidates = extractTrackingCandidates(pageText);
         const labelPageIndex = pageNumber - 1;
-        const invoicePageIndex = pageNumber < pageCount ? pageNumber : null;
+        let invoicePageIndex = null;
+
+        if (pageNumber < pageCount) {
+            const nextPage = await pdfDoc.getPage(pageNumber + 1);
+            const nextTextContent = await nextPage.getTextContent();
+            const nextPageText = nextTextContent.items.map(item => item.str || '').join(' ');
+            const nextPageHasBarcode = hasBarcodeLikeTextForSorter(nextPageText);
+
+            if (!nextPageHasBarcode) {
+                invoicePageIndex = pageNumber;
+            }
+        }
 
         candidates.forEach(tracking => {
             const key = `${tracking}::${labelPageIndex}`;
@@ -4308,7 +4445,7 @@ function initCroppingTab() {
     el.uploadArea.addEventListener('drop', (e) => {
         e.preventDefault();
         el.uploadArea.classList.remove('dragover');
-        const files = Array.from(e.dataTransfer.files).filter(f => f.type === 'application/pdf');
+        const files = getDroppedFiles(e.dataTransfer, isPdfLikeFile);
         if (files.length > 0) handleCroppingFiles(files);
     });
 
@@ -4493,6 +4630,489 @@ async function processCroppingAutomatic(fileDataArray) {
     }
 
     updateCroppingProgress(100, '✅ Processing complete!');
+}
+
+const SKU_AUTOMATION_DEFAULT_SETTINGS = {
+    baseSourceFolder: '',
+    processedFolder: '',
+    sourcePdfFolder: '',
+    folderToClear: '',
+    skuCsvPath: '',
+    googleSheetName: 'order wali sheet',
+    ordersTabName: 'ORDERS',
+    stockAnalysisTabName: 'STOCK ANALYSIS',
+    waitTimeForPivotSeconds: 5,
+    possibleSkuColumnNames: ['sku', 'product id', 'item code', 'seller sku', 'order item sku'],
+    meeshoCreditEntryColumn: 'Reason for Credit Entry',
+    meeshoFilterReasons: ['PENDING', 'HOLD'],
+    serviceAccount: {
+        isImported: false,
+    },
+};
+
+function getSkuAutomationElements() {
+    return {
+        banner: document.getElementById('skuAutomationDesktopBanner'),
+        lockedNotice: document.getElementById('skuAutomationLockedNotice'),
+        settingsPanel: document.getElementById('skuAutomationSettingsPanel'),
+        unlockBtn: document.getElementById('skuAutomationUnlockBtn'),
+        saveSettingsBtn: document.getElementById('skuAutomationSaveSettingsBtn'),
+        importSettingsBtn: document.getElementById('skuAutomationImportSettingsBtn'),
+        exportSettingsBtn: document.getElementById('skuAutomationExportSettingsBtn'),
+        importServiceAccountBtn: document.getElementById('skuAutomationImportServiceAccountBtn'),
+        scanFolderBtn: document.getElementById('skuAutomationScanFolderBtn'),
+        clearFilesBtn: document.getElementById('skuAutomationClearFilesBtn'),
+        manualFilesList: document.getElementById('skuAutomationManualFilesList'),
+        runBtn: document.getElementById('skuAutomationRunBtn'),
+        statusText: document.getElementById('skuAutomationStatusText'),
+        logOutput: document.getElementById('skuAutomationLog'),
+        movedFiles: document.getElementById('skuAutomationMovedFiles'),
+        skippedFiles: document.getElementById('skuAutomationSkippedFiles'),
+        missingSkus: document.getElementById('skuAutomationMissingSkus'),
+        meeshoCount: document.getElementById('skuAutomationMeeshoCount'),
+        flipkartCount: document.getElementById('skuAutomationFlipkartCount'),
+        amazonCount: document.getElementById('skuAutomationAmazonCount'),
+        totalCount: document.getElementById('skuAutomationTotalCount'),
+        baseSourceFolder: document.getElementById('skuAutomationBaseSourceFolder'),
+        processedFolder: document.getElementById('skuAutomationProcessedFolder'),
+        sourcePdfFolder: document.getElementById('skuAutomationSourcePdfFolder'),
+        folderToClear: document.getElementById('skuAutomationFolderToClear'),
+        skuCsvPath: document.getElementById('skuAutomationSkuCsvPath'),
+        googleSheetName: document.getElementById('skuAutomationGoogleSheetName'),
+        ordersTabName: document.getElementById('skuAutomationOrdersTabName'),
+        stockAnalysisTabName: document.getElementById('skuAutomationStockAnalysisTabName'),
+        waitTime: document.getElementById('skuAutomationWaitTime'),
+        possibleSkuColumns: document.getElementById('skuAutomationPossibleSkuColumns'),
+        meeshoCreditEntryColumn: document.getElementById('skuAutomationMeeshoCreditEntryColumn'),
+        meeshoFilterReasons: document.getElementById('skuAutomationMeeshoFilterReasons'),
+        serviceAccountStatus: document.getElementById('skuAutomationServiceAccountStatus'),
+        browseButtons: Array.from(document.querySelectorAll('.sku-automation-browse-btn')),
+    };
+}
+
+function isDesktopAutomationAvailable() {
+    return isDesktopApp();
+}
+
+function getServiceAccountStatusText(serviceAccount, isUnlocked) {
+    if (serviceAccount && serviceAccount.isImported) {
+        return isUnlocked
+            ? 'A desktop service account key is stored for this profile.'
+            : 'A desktop service account key is already stored.';
+    }
+
+    return isUnlocked
+        ? 'No desktop service account key imported yet.'
+        : 'Service account status is hidden until settings are unlocked.';
+}
+
+function normalizeSkuAutomationList(value) {
+    if (Array.isArray(value)) {
+        return value.map(item => String(item).trim()).filter(Boolean);
+    }
+
+    return String(value || '')
+        .split(',')
+        .map(item => item.trim())
+        .filter(Boolean);
+}
+
+function updateSkuAutomationStatus(message) {
+    const el = getSkuAutomationElements();
+    if (el.statusText) {
+        el.statusText.textContent = message;
+    }
+}
+
+function setSkuAutomationLog(lines) {
+    const el = getSkuAutomationElements();
+    if (el.logOutput) {
+        el.logOutput.textContent = Array.isArray(lines) ? lines.join('\n') : String(lines || '');
+    }
+}
+
+function renderSkuAutomationResultList(container, items, formatter) {
+    if (!container) return;
+    if (!items || items.length === 0) {
+        container.innerHTML = '<div class="sku-automation-result-item muted">None</div>';
+        return;
+    }
+
+    container.innerHTML = items.map(item => `<div class="sku-automation-result-item">${formatter(item)}</div>`).join('');
+}
+
+function renderSkuAutomationFileList() {
+    const el = getSkuAutomationElements();
+    if (!el.manualFilesList) return;
+
+    if (skuAutomationSelectedFiles.length === 0) {
+        el.manualFilesList.innerHTML = '<div class="sku-automation-result-item muted">No scanned source files yet.</div>';
+        return;
+    }
+
+    el.manualFilesList.innerHTML = skuAutomationSelectedFiles.map(file => `
+        <div class="sku-automation-file-item">
+            <span>${file.name}</span>
+            <span>${file.path}${file.type ? ` • ${file.type}` : ''}</span>
+        </div>
+    `).join('');
+}
+
+function updateSkuAutomationScanAvailability() {
+    const el = getSkuAutomationElements();
+    if (!el.scanFolderBtn) return;
+
+    const hasConfiguredSource = Boolean(el.baseSourceFolder && el.baseSourceFolder.value.trim());
+    el.scanFolderBtn.disabled = !isDesktopAutomationAvailable() || !hasConfiguredSource;
+}
+
+function fillSkuAutomationForm(settings) {
+    const el = getSkuAutomationElements();
+    skuAutomationSettings = {
+        ...SKU_AUTOMATION_DEFAULT_SETTINGS,
+        ...settings,
+        serviceAccount: {
+            ...SKU_AUTOMATION_DEFAULT_SETTINGS.serviceAccount,
+            ...(settings && settings.serviceAccount ? settings.serviceAccount : {}),
+        },
+    };
+
+    el.baseSourceFolder.value = skuAutomationSettings.baseSourceFolder || '';
+    el.processedFolder.value = skuAutomationSettings.processedFolder || '';
+    el.sourcePdfFolder.value = skuAutomationSettings.sourcePdfFolder || '';
+    el.folderToClear.value = skuAutomationSettings.folderToClear || '';
+    el.skuCsvPath.value = skuAutomationSettings.skuCsvPath || '';
+    el.googleSheetName.value = skuAutomationSettings.googleSheetName || '';
+    el.ordersTabName.value = skuAutomationSettings.ordersTabName || '';
+    el.stockAnalysisTabName.value = skuAutomationSettings.stockAnalysisTabName || '';
+    el.waitTime.value = skuAutomationSettings.waitTimeForPivotSeconds || 5;
+    el.possibleSkuColumns.value = normalizeSkuAutomationList(skuAutomationSettings.possibleSkuColumnNames).join(', ');
+    el.meeshoCreditEntryColumn.value = skuAutomationSettings.meeshoCreditEntryColumn || '';
+    el.meeshoFilterReasons.value = normalizeSkuAutomationList(skuAutomationSettings.meeshoFilterReasons).join(', ');
+
+    if (el.serviceAccountStatus) {
+        el.serviceAccountStatus.textContent = getServiceAccountStatusText(
+            skuAutomationSettings.serviceAccount,
+            skuAutomationSettingsUnlocked
+        );
+    }
+
+    updateSkuAutomationScanAvailability();
+}
+
+function collectSkuAutomationSettings() {
+    const el = getSkuAutomationElements();
+    return {
+        baseSourceFolder: el.baseSourceFolder.value.trim(),
+        processedFolder: el.processedFolder.value.trim(),
+        sourcePdfFolder: el.sourcePdfFolder.value.trim(),
+        folderToClear: el.folderToClear.value.trim(),
+        skuCsvPath: el.skuCsvPath.value.trim(),
+        googleSheetName: el.googleSheetName.value.trim(),
+        ordersTabName: el.ordersTabName.value.trim(),
+        stockAnalysisTabName: el.stockAnalysisTabName.value.trim(),
+        waitTimeForPivotSeconds: Number.parseInt(el.waitTime.value, 10) || 5,
+        possibleSkuColumnNames: normalizeSkuAutomationList(el.possibleSkuColumns.value),
+        meeshoCreditEntryColumn: el.meeshoCreditEntryColumn.value.trim(),
+        meeshoFilterReasons: normalizeSkuAutomationList(el.meeshoFilterReasons.value),
+    };
+}
+
+function updateSkuAutomationSettingsLock() {
+    const el = getSkuAutomationElements();
+    const editableInputs = [
+        el.baseSourceFolder,
+        el.processedFolder,
+        el.sourcePdfFolder,
+        el.folderToClear,
+        el.skuCsvPath,
+        el.googleSheetName,
+        el.ordersTabName,
+        el.stockAnalysisTabName,
+        el.waitTime,
+        el.possibleSkuColumns,
+        el.meeshoCreditEntryColumn,
+        el.meeshoFilterReasons,
+    ];
+
+    editableInputs.forEach(input => {
+        if (input) input.disabled = !skuAutomationSettingsUnlocked;
+    });
+    el.browseButtons.forEach(button => {
+        button.disabled = !skuAutomationSettingsUnlocked || !isDesktopAutomationAvailable();
+    });
+    if (el.saveSettingsBtn) el.saveSettingsBtn.disabled = !skuAutomationSettingsUnlocked || !isDesktopAutomationAvailable();
+    if (el.importSettingsBtn) el.importSettingsBtn.disabled = !skuAutomationSettingsUnlocked || !isDesktopAutomationAvailable();
+    if (el.exportSettingsBtn) el.exportSettingsBtn.disabled = !skuAutomationSettingsUnlocked || !isDesktopAutomationAvailable();
+    if (el.importServiceAccountBtn) el.importServiceAccountBtn.disabled = !skuAutomationSettingsUnlocked || !isDesktopAutomationAvailable();
+    if (el.unlockBtn) {
+        el.unlockBtn.textContent = skuAutomationSettingsUnlocked ? '🔓 Settings Unlocked' : '🔒 Unlock Settings';
+    }
+    if (el.lockedNotice) {
+        el.lockedNotice.hidden = skuAutomationSettingsUnlocked;
+    }
+    if (el.settingsPanel) {
+        el.settingsPanel.hidden = !skuAutomationSettingsUnlocked;
+    }
+    if (el.serviceAccountStatus) {
+        el.serviceAccountStatus.textContent = getServiceAccountStatusText(
+            skuAutomationSettings?.serviceAccount,
+            skuAutomationSettingsUnlocked
+        );
+    }
+
+    updateSkuAutomationScanAvailability();
+}
+
+async function loadSkuAutomationSettings() {
+    const el = getSkuAutomationElements();
+    if (!isDesktopAutomationAvailable()) {
+        fillSkuAutomationForm(SKU_AUTOMATION_DEFAULT_SETTINGS);
+        updateSkuAutomationSettingsLock();
+        renderSkuAutomationFileList();
+        return;
+    }
+
+    try {
+        const settings = await window.desktopAPI.getSettings();
+        fillSkuAutomationForm(settings || SKU_AUTOMATION_DEFAULT_SETTINGS);
+        if (el.banner) {
+            el.banner.className = 'sku-automation-banner sku-automation-banner-success';
+            el.banner.textContent = 'Desktop app bridge detected. Local folder automation is available on this machine.';
+        }
+    } catch (error) {
+        console.error('Failed to load SKU automation settings:', error);
+        updateSkuAutomationStatus(`Could not load desktop settings: ${error.message}`);
+        fillSkuAutomationForm(SKU_AUTOMATION_DEFAULT_SETTINGS);
+    }
+
+    updateSkuAutomationSettingsLock();
+    renderSkuAutomationFileList();
+}
+
+async function saveSkuAutomationSettings() {
+    if (!isDesktopAutomationAvailable()) {
+        return;
+    }
+
+    const settings = collectSkuAutomationSettings();
+    await window.desktopAPI.saveSettings(settings);
+    await loadSkuAutomationSettings();
+    updateSkuAutomationStatus('SKU automation settings saved locally in the desktop profile.');
+}
+
+async function handleSkuAutomationBrowse(button) {
+    if (!isDesktopAutomationAvailable()) {
+        return;
+    }
+
+    const targetId = button.getAttribute('data-target');
+    const kind = button.getAttribute('data-kind');
+    const target = document.getElementById(targetId);
+    if (!target) return;
+
+    if (kind === 'directory') {
+        const folderPath = await window.desktopAPI.selectDirectory({ title: 'Select folder' });
+        if (folderPath) target.value = folderPath;
+        return;
+    }
+
+    if (kind === 'save-file') {
+        const filePath = await window.desktopAPI.selectSaveFile({
+            title: 'Choose SKU CSV output path',
+            defaultPath: 'sku.csv',
+            filters: [{ name: 'CSV', extensions: ['csv'] }],
+        });
+        if (filePath) {
+            target.value = filePath;
+        }
+    }
+}
+
+function extractDesktopFileMetadata(file) {
+    const filePath = file.path || file.webkitRelativePath || '';
+    return {
+        name: file.name,
+        path: filePath,
+    };
+}
+
+function handleSkuAutomationFiles(files) {
+    const incoming = files
+        .map(extractDesktopFileMetadata)
+        .filter(file => file.path && isSupportedOrderFile(file));
+
+    const seen = new Set(skuAutomationSelectedFiles.map(file => file.path));
+    incoming.forEach(file => {
+        if (!seen.has(file.path)) {
+            skuAutomationSelectedFiles.push(file);
+            seen.add(file.path);
+        }
+    });
+    renderSkuAutomationFileList();
+    updateSkuAutomationStatus(`${skuAutomationSelectedFiles.length} source file(s) ready for processing.`);
+}
+
+async function scanSkuAutomationSourceFolder() {
+    if (!isDesktopAutomationAvailable()) {
+        return;
+    }
+
+    const settings = collectSkuAutomationSettings();
+    if (!settings.baseSourceFolder) {
+        alert('Set the Base Source Folder first, then click Scan Folder.');
+        return;
+    }
+
+    updateSkuAutomationStatus(`Scanning ${settings.baseSourceFolder}...`);
+
+    try {
+        const result = await window.desktopAPI.scanSourceFiles({ settings });
+        skuAutomationSelectedFiles = (result.files || []).map(file => ({
+            name: file.name,
+            path: file.path,
+            type: file.type,
+            modifiedAt: file.modifiedAt,
+            size: file.size,
+        }));
+        renderSkuAutomationFileList();
+
+        if (skuAutomationSelectedFiles.length === 0) {
+            updateSkuAutomationStatus(`No supported order files found in ${result.baseSourceFolder}. Subfolders are not scanned.`);
+            return;
+        }
+
+        updateSkuAutomationStatus(`Scanned ${skuAutomationSelectedFiles.length} file(s) from ${result.baseSourceFolder}. Subfolders were ignored.`);
+    } catch (error) {
+        console.error('Source folder scan failed:', error);
+        updateSkuAutomationStatus(`Folder scan failed: ${error.message}`);
+    }
+}
+
+function clearSkuAutomationFiles() {
+    skuAutomationSelectedFiles = [];
+    renderSkuAutomationFileList();
+    updateSkuAutomationStatus('Scanned file list cleared.');
+}
+
+function renderSkuAutomationResults(result) {
+    const el = getSkuAutomationElements();
+    el.meeshoCount.textContent = result.summary?.meesho || 0;
+    el.flipkartCount.textContent = result.summary?.flipkart || 0;
+    el.amazonCount.textContent = result.summary?.amazon || 0;
+    el.totalCount.textContent = result.summary?.total || 0;
+
+    renderSkuAutomationResultList(el.movedFiles, result.movedFiles, item => `${item.fileName} → ${item.destinationPath}`);
+    renderSkuAutomationResultList(
+        el.skippedFiles,
+        [...(result.skippedFiles || []), ...(result.failures || []).map(item => ({ fileName: item.fileName, reason: item.error }))],
+        item => `${item.fileName}: ${item.reason}`
+    );
+    renderSkuAutomationResultList(el.missingSkus, result.missingSkus || [], item => item);
+    setSkuAutomationLog(result.logs || []);
+}
+
+async function runSkuAutomationFromUI() {
+    if (!isDesktopAutomationAvailable()) {
+        updateSkuAutomationStatus('Desktop bridge not available. Open the Windows desktop build to run this workflow.');
+        return;
+    }
+
+    const el = getSkuAutomationElements();
+    const settings = collectSkuAutomationSettings();
+
+    if (skuAutomationSelectedFiles.length === 0) {
+        alert('Scan the configured source folder first.');
+        return;
+    }
+
+    el.runBtn.disabled = true;
+    updateSkuAutomationStatus('Running SKU automation. This can take a few seconds while Google Sheets refreshes.');
+    setSkuAutomationLog(['Starting run...']);
+
+    try {
+        await window.desktopAPI.saveSettings(settings);
+        const result = await window.desktopAPI.runSkuAutomation({
+            settings,
+            manualFilePaths: skuAutomationSelectedFiles.map(file => file.path),
+        });
+        renderSkuAutomationResults(result);
+        updateSkuAutomationStatus('SKU automation finished. Review the logs and result lists below.');
+        fillSkuAutomationForm({ ...settings, serviceAccount: skuAutomationSettings?.serviceAccount || {} });
+    } catch (error) {
+        console.error('SKU automation failed:', error);
+        updateSkuAutomationStatus(`Run failed: ${error.message}`);
+        setSkuAutomationLog([`Run failed: ${error.message}`]);
+    } finally {
+        el.runBtn.disabled = false;
+    }
+}
+
+async function initSkuAutomationTab() {
+    const el = getSkuAutomationElements();
+    if (!el.runBtn) return;
+
+    if (el.unlockBtn) {
+        el.unlockBtn.addEventListener('click', () => {
+            if (!skuAutomationSettingsUnlocked) {
+                showPasswordModal('skuAutomationSettings');
+            }
+        });
+    }
+
+    if (el.saveSettingsBtn) {
+        el.saveSettingsBtn.addEventListener('click', saveSkuAutomationSettings);
+    }
+    if (el.importSettingsBtn) {
+        el.importSettingsBtn.addEventListener('click', async () => {
+            if (!isDesktopAutomationAvailable()) return;
+            const imported = await window.desktopAPI.importSettings();
+            if (imported) {
+                await loadSkuAutomationSettings();
+                updateSkuAutomationStatus('Configuration imported into the desktop profile.');
+            }
+        });
+    }
+    if (el.exportSettingsBtn) {
+        el.exportSettingsBtn.addEventListener('click', async () => {
+            if (!isDesktopAutomationAvailable()) return;
+            const savedPath = await window.desktopAPI.exportSettings();
+            if (savedPath) {
+                updateSkuAutomationStatus(`Configuration exported to ${savedPath}.`);
+            }
+        });
+    }
+    if (el.importServiceAccountBtn) {
+        el.importServiceAccountBtn.addEventListener('click', async () => {
+            if (!isDesktopAutomationAvailable()) return;
+            const status = await window.desktopAPI.importServiceAccount();
+            if (status) {
+                fillSkuAutomationForm({ ...collectSkuAutomationSettings(), serviceAccount: status });
+                updateSkuAutomationStatus('Desktop service account key imported successfully.');
+            }
+        });
+    }
+
+    el.browseButtons.forEach(button => {
+        button.addEventListener('click', () => handleSkuAutomationBrowse(button));
+    });
+
+    if (el.scanFolderBtn) {
+        el.scanFolderBtn.addEventListener('click', scanSkuAutomationSourceFolder);
+    }
+    if (el.clearFilesBtn) {
+        el.clearFilesBtn.addEventListener('click', clearSkuAutomationFiles);
+    }
+    if (el.runBtn) {
+        el.runBtn.addEventListener('click', runSkuAutomationFromUI);
+    }
+
+    [el.baseSourceFolder, el.processedFolder, el.sourcePdfFolder, el.folderToClear, el.skuCsvPath].forEach(input => {
+        if (!input) return;
+        input.addEventListener('input', updateSkuAutomationScanAvailability);
+    });
+
+    await loadSkuAutomationSettings();
 }
 
 // ------------------------------------------------------------------

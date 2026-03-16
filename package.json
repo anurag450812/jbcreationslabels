@@ -1,6 +1,40 @@
 {
+  "name": "jbcreationslabels",
+  "version": "1.0.0",
+  "description": "JB Creations desktop label tools and SKU automation",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "desktop": "electron .",
+    "build:win": "electron-builder --win portable",
+    "build:installer": "electron-builder --win nsis"
+  },
+  "build": {
+    "appId": "com.jbcreations.labels",
+    "productName": "JB Creations Labels",
+    "files": [
+      "index.html",
+      "styles.css",
+      "script.js",
+      "google-apps-script.js",
+      "src/**/*",
+      "package.json"
+    ],
+    "win": {
+      "requestedExecutionLevel": "asInvoker",
+      "target": [
+        "portable"
+      ]
+    }
+  },
   "dependencies": {
+    "googleapis": "^150.0.1",
     "pdf-lib": "^1.17.1",
-    "pdfjs-dist": "^5.4.624"
+    "pdfjs-dist": "^5.4.624",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "electron": "^36.0.0",
+    "electron-builder": "^25.1.8"
   }
 }
