@@ -2173,6 +2173,23 @@ async function extractPagesFromPDF(file) {
             fileRef: file  // Store file reference instead of ArrayBuffer
         });
     }
+
+    for (let i = 0; i < pages.length; i++) {
+        const currentPage = pages[i];
+        const nextPage = pages[i + 1];
+
+        if (!nextPage) continue;
+        if (!hasAmazonInvoicePageMarkerForSorter(nextPage.text)) continue;
+
+        currentPage.platform = 'amazon';
+        currentPage.subGroup = 'AMAZON';
+        currentPage.isAmazonPairedLabel = true;
+
+        if (!isRecognizedSorterPlatform(nextPage.platform)) {
+            nextPage.platform = 'amazon';
+            nextPage.subGroup = 'AMAZON';
+        }
+    }
     
     return pages;
 }
@@ -2325,7 +2342,14 @@ function sortPages(pages) {
 
     const outputPages = [];
     for (const order of [...priorityOrders, ...otherOrders]) {
-        outputPages.push(order.labelPage);
+        for (const leadingPage of order.leadingPages || []) {
+            outputPages.push(leadingPage);
+        }
+
+        if (order.labelPage) {
+            outputPages.push(order.labelPage);
+        }
+
         for (const invoicePage of order.invoicePages) {
             outputPages.push(invoicePage);
         }
@@ -2387,12 +2411,40 @@ function isBarcodeLabelPageForSorter(page) {
     return hasBarcodeLikeTextForSorter(page && typeof page.text === 'string' ? page.text : '');
 }
 
+function hasAmazonInvoicePageMarkerForSorter(text) {
+    if (!text || typeof text !== 'string') return false;
+
+    return /tax\s+invoice\s*\/\s*bill\s+of\s+supply\s*\/\s*cash\s+memo/i.test(text);
+}
+
+function hasAmazonLabelLikeTextForSorter(text) {
+    if (!text || typeof text !== 'string') return false;
+
+    if (!/amazon(?:\.in)?/i.test(text)) return false;
+    if (hasAmazonInvoicePageMarkerForSorter(text)) return false;
+
+    return /ship(?:ping)?|delivery|track(?:ing)?|awb|customer\s+address|ship\s+to|dispatch|barcode|qr\s*code/i.test(text);
+}
+
 function isRecognizedSorterPlatform(platform) {
     return platform === 'flipkart' || platform === 'meesho' || platform === 'amazon';
 }
 
 function isSorterLabelPage(page) {
-    return isBarcodeLabelPageForSorter(page) && isRecognizedSorterPlatform(page && page.platform);
+    if (!page || !isRecognizedSorterPlatform(page.platform)) {
+        return false;
+    }
+
+    if (page.platform === 'amazon') {
+        const pageText = typeof page.text === 'string' ? page.text : '';
+        if (hasAmazonInvoicePageMarkerForSorter(pageText)) {
+            return false;
+        }
+
+        return page.isAmazonPairedLabel || isBarcodeLabelPageForSorter(page) || hasAmazonLabelLikeTextForSorter(pageText);
+    }
+
+    return isBarcodeLabelPageForSorter(page);
 }
 
 function hasBarcodeLikeContentForCounter(textVariants, rawItems) {
@@ -2451,6 +2503,11 @@ function hasBarcodeLikeContentForCounter(textVariants, rawItems) {
 
 function buildPageOrdersByAdjacency(pages) {
     const orders = [];
+    const usedPages = new Set();
+
+    function getPageKey(page) {
+        return `${page.fileName}::${page.pageNumber}`;
+    }
 
     // Group by source file first
     const byFile = new Map();
@@ -2464,20 +2521,45 @@ function buildPageOrdersByAdjacency(pages) {
 
         for (let i = 0; i < filePages.length; i++) {
             const currentPage = filePages[i];
-            const isLabelPage = isSorterLabelPage(currentPage);
-            if (!isLabelPage) continue;
+            const currentPageKey = getPageKey(currentPage);
+            if (usedPages.has(currentPageKey)) continue;
 
+            const isLabelPage = isSorterLabelPage(currentPage);
+            const previousPage = i > 0 ? filePages[i - 1] : null;
             const nextPage = filePages[i + 1];
-            if (nextPage) {
-                const nextPageIsBarcodeLabel = isSorterLabelPage(nextPage);
-                if (!nextPageIsBarcodeLabel) {
-                    orders.push({ labelPage: currentPage, invoicePages: [nextPage], isBarcodeLabel: true });
-                    continue;
+
+            if (!isLabelPage) {
+                const nextPageIsLabel = nextPage && isSorterLabelPage(nextPage);
+                if (nextPageIsLabel) continue;
+
+                usedPages.add(currentPageKey);
+                orders.push({ labelPage: null, leadingPages: [currentPage], invoicePages: [], isBarcodeLabel: false });
+                continue;
+            }
+
+            const leadingPages = [];
+            const invoicePages = [];
+
+            if (previousPage) {
+                const previousPageKey = getPageKey(previousPage);
+                const previousPageIsLabel = isSorterLabelPage(previousPage);
+                if (!previousPageIsLabel && !usedPages.has(previousPageKey)) {
+                    leadingPages.push(previousPage);
+                    usedPages.add(previousPageKey);
                 }
             }
 
-            // Label page exists but no available immediate next page to pair
-            orders.push({ labelPage: currentPage, invoicePages: [], isBarcodeLabel: true });
+            if (nextPage) {
+                const nextPageKey = getPageKey(nextPage);
+                const nextPageIsBarcodeLabel = isSorterLabelPage(nextPage);
+                if (!nextPageIsBarcodeLabel && !usedPages.has(nextPageKey)) {
+                    invoicePages.push(nextPage);
+                    usedPages.add(nextPageKey);
+                }
+            }
+
+            usedPages.add(currentPageKey);
+            orders.push({ labelPage: currentPage, leadingPages, invoicePages, isBarcodeLabel: true });
         }
     }
 
