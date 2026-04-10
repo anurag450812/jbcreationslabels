@@ -28,6 +28,9 @@
                 <button class="tab-btn" data-tab="finder" onclick="switchTab('finder')">
                     🔎 Label Finder
                 </button>
+                <button class="tab-btn" data-tab="packet-parchi" onclick="switchTab('packet-parchi')">
+                    🧾 Packet Parchi
+                </button>
                 <button class="tab-btn" id="skuAutomationTabBtn" data-tab="sku-automation" onclick="switchTab('sku-automation')">
                     📦 SKU To New3 Automation
                 </button>
@@ -352,6 +355,60 @@
                 </section>
             </div>
             <!-- END FINDER TAB CONTENT -->
+
+            <!-- PACKET PARCHI TAB CONTENT -->
+            <div id="packet-parchi-tab-content" class="tab-content">
+                <section class="packet-parchi-section">
+                    <div class="results-card packet-parchi-card">
+                        <h3>🧾 Packet Parchi PDF</h3>
+                        <p>Create a multi-page packet parchi PDF. Every page uses a 50 mm horizontal width and 25 mm vertical height, with the maker name on the top half and the checker name on the bottom half.</p>
+
+                        <div class="packet-parchi-specs">
+                            <div class="packet-parchi-spec-item">
+                                <span class="packet-parchi-spec-label">Page Size</span>
+                                <strong>50 mm × 25 mm</strong>
+                            </div>
+                            <div class="packet-parchi-spec-item">
+                                <span class="packet-parchi-spec-label">Output</span>
+                                <strong>One packet parchi per page</strong>
+                            </div>
+                        </div>
+
+                        <div class="packet-parchi-grid">
+                            <label class="packet-parchi-field">
+                                <span>Staff making the order</span>
+                                <input type="text" id="packetParchiMakerName" placeholder="Enter maker name" autocapitalize="characters" spellcheck="false">
+                            </label>
+
+                            <label class="packet-parchi-field">
+                                <span>Staff checking the order</span>
+                                <input type="text" id="packetParchiCheckerName" placeholder="Enter checker name" autocapitalize="characters" spellcheck="false">
+                            </label>
+
+                            <label class="packet-parchi-field">
+                                <span>Number of pages</span>
+                                <input type="number" id="packetParchiPageCount" min="1" max="5000" step="1" value="1">
+                            </label>
+                        </div>
+
+                        <div class="button-group">
+                            <button class="btn btn-primary" id="packetParchiGenerateBtn">
+                                ⬇️ Generate Packet Parchi PDF
+                            </button>
+                        </div>
+
+                        <div id="packetParchiStatus" class="packet-parchi-status" style="display: none;"></div>
+                    </div>
+                </section>
+
+                <section class="packet-parchi-result-section" id="packetParchiResultSection" style="display: none;">
+                    <div class="results-card">
+                        <h3>📄 Last Generated PDF</h3>
+                        <p id="packetParchiResultSummary"></p>
+                    </div>
+                </section>
+            </div>
+            <!-- END PACKET PARCHI TAB CONTENT -->
 
             <!-- SKU AUTOMATION TAB CONTENT -->
             <div id="sku-automation-tab-content" class="tab-content">

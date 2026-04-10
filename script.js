@@ -422,6 +422,13 @@ const finderHistoryList = document.getElementById('finderHistoryList');
 const finderResultsList = document.getElementById('finderResultsList');
 const finderSelectedMeta = document.getElementById('finderSelectedMeta');
 const finderLabelCanvas = document.getElementById('finderLabelCanvas');
+const packetParchiMakerInput = document.getElementById('packetParchiMakerName');
+const packetParchiCheckerInput = document.getElementById('packetParchiCheckerName');
+const packetParchiPageCountInput = document.getElementById('packetParchiPageCount');
+const packetParchiGenerateBtn = document.getElementById('packetParchiGenerateBtn');
+const packetParchiStatus = document.getElementById('packetParchiStatus');
+const packetParchiResultSection = document.getElementById('packetParchiResultSection');
+const packetParchiResultSummary = document.getElementById('packetParchiResultSummary');
 const deviceAuthModal = document.getElementById('deviceAuthModal');
 const deviceAuthInput = document.getElementById('deviceAuthInput');
 const deviceAuthSubmitBtn = document.getElementById('deviceAuthSubmitBtn');
@@ -540,7 +547,7 @@ function configureDesktopSkuOnlyMode() {
     }
 
     if (headerSubtitle) {
-        headerSubtitle.textContent = 'Desktop app mode: only the SKU To New3 workflow is available here. Label sorting, counter, cropping, and finder stay on the website.';
+        headerSubtitle.textContent = 'Desktop app mode: only the SKU To New3 workflow is available here. Label sorting, counter, cropping, finder, and packet parchi stay on the website.';
     }
 
     document.querySelectorAll('.tab-btn').forEach(button => {
@@ -592,7 +599,7 @@ function initializeApp() {
     
     // Restore active tab from localStorage
     const savedTab = isDesktopApp() ? 'sku-automation' : localStorage.getItem('activeTab');
-    if (savedTab && (savedTab === 'sorting' || savedTab === 'counter' || savedTab === 'cropping' || savedTab === 'finder' || savedTab === 'sku-automation')) {
+    if (savedTab && (savedTab === 'sorting' || savedTab === 'counter' || savedTab === 'cropping' || savedTab === 'finder' || savedTab === 'packet-parchi' || savedTab === 'sku-automation')) {
         switchTab(savedTab);
     }
     
@@ -791,6 +798,222 @@ function showCloudSyncNotification(message) {
     }, 3000);
 }
 
+function mmToPoints(mm) {
+    return (Number(mm) * 72) / 25.4;
+}
+
+function sanitizeFilePart(value) {
+    return String(value || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '') || 'staff';
+}
+
+function downloadBlobFile(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+function setPacketParchiStatus(message, type = 'info') {
+    if (!packetParchiStatus) return;
+
+    packetParchiStatus.textContent = message;
+    packetParchiStatus.className = `packet-parchi-status packet-parchi-status-${type}`;
+    packetParchiStatus.style.display = 'block';
+}
+
+function normalizePacketParchiName(value) {
+    return String(value || '').trim().toLocaleUpperCase();
+}
+
+function enforcePacketParchiUppercase(input) {
+    if (!input) return;
+
+    const normalizedValue = normalizePacketParchiName(input.value);
+    if (input.value === normalizedValue) {
+        return;
+    }
+
+    const selectionStart = input.selectionStart;
+    const selectionEnd = input.selectionEnd;
+    input.value = normalizedValue;
+
+    if (typeof selectionStart === 'number' && typeof selectionEnd === 'number') {
+        input.setSelectionRange(selectionStart, selectionEnd);
+    }
+}
+
+function drawCenteredFittedText(page, text, font, startSize, minSize, maxWidth, maxHeight, centerX, centerY, color) {
+    let fontSize = startSize;
+    const safeText = String(text || '').trim();
+
+    if (!safeText) {
+        return;
+    }
+
+    while (
+        fontSize > minSize
+        && (
+            font.widthOfTextAtSize(safeText, fontSize) > maxWidth
+            || font.heightAtSize(fontSize) > maxHeight
+        )
+    ) {
+        fontSize -= 0.5;
+    }
+
+    const textWidth = font.widthOfTextAtSize(safeText, fontSize);
+    const textHeight = font.heightAtSize(fontSize);
+    page.drawText(safeText, {
+        x: centerX - (textWidth / 2),
+        y: centerY - (textHeight / 2),
+        size: fontSize,
+        font,
+        color
+    });
+}
+
+function drawPacketParchiSection(page, sectionTop, sectionBottom, value, boldFont, colors) {
+    const centerX = page.getWidth() / 2;
+    const sectionHeight = sectionTop - sectionBottom;
+    const centerY = (sectionTop + sectionBottom) / 2;
+    const maxTextWidth = page.getWidth() - mmToPoints(2.5);
+    const maxTextHeight = Math.max(sectionHeight - mmToPoints(1.2), mmToPoints(5));
+
+    drawCenteredFittedText(
+        page,
+        value,
+        boldFont,
+        30,
+        7,
+        maxTextWidth,
+        maxTextHeight,
+        centerX,
+        centerY,
+        colors.text
+    );
+}
+
+async function buildPacketParchiPdfBlob(makerName, checkerName, pageCount) {
+    const { PDFDocument, StandardFonts, rgb } = PDFLib;
+    const pdfDoc = await PDFDocument.create();
+    const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+    const pageWidth = mmToPoints(50);
+    const pageHeight = mmToPoints(25);
+    const gutter = mmToPoints(1.2);
+    const dividerY = pageHeight / 2;
+    const colors = {
+        border: rgb(0.83, 0.87, 0.94),
+        text: rgb(0.12, 0.16, 0.22)
+    };
+
+    for (let index = 0; index < pageCount; index += 1) {
+        const page = pdfDoc.addPage([pageWidth, pageHeight]);
+
+        page.drawRectangle({
+            x: 0.75,
+            y: 0.75,
+            width: pageWidth - 1.5,
+            height: pageHeight - 1.5,
+            borderColor: colors.border,
+            borderWidth: 1
+        });
+
+        page.drawLine({
+            start: { x: gutter, y: dividerY },
+            end: { x: pageWidth - gutter, y: dividerY },
+            thickness: 0.8,
+            color: colors.border
+        });
+
+        drawPacketParchiSection(page, pageHeight - gutter, dividerY + 1, makerName, boldFont, colors);
+        drawPacketParchiSection(page, dividerY - 1, gutter, checkerName, boldFont, colors);
+    }
+
+    const pdfBytes = await pdfDoc.save();
+    return new Blob([pdfBytes], { type: 'application/pdf' });
+}
+
+async function generatePacketParchiPdf() {
+    if (!packetParchiMakerInput || !packetParchiCheckerInput || !packetParchiPageCountInput || !packetParchiGenerateBtn) {
+        return;
+    }
+
+    enforcePacketParchiUppercase(packetParchiMakerInput);
+    enforcePacketParchiUppercase(packetParchiCheckerInput);
+
+    const makerName = normalizePacketParchiName(packetParchiMakerInput.value);
+    const checkerName = normalizePacketParchiName(packetParchiCheckerInput.value);
+    const pageCount = Number.parseInt(packetParchiPageCountInput.value, 10);
+
+    packetParchiMakerInput.value = makerName;
+    packetParchiCheckerInput.value = checkerName;
+
+    if (!makerName) {
+        setPacketParchiStatus('Enter the name of the staff making the order.', 'error');
+        packetParchiMakerInput.focus();
+        return;
+    }
+
+    if (!checkerName) {
+        setPacketParchiStatus('Enter the name of the staff checking the order.', 'error');
+        packetParchiCheckerInput.focus();
+        return;
+    }
+
+    if (!Number.isInteger(pageCount) || pageCount < 1 || pageCount > 5000) {
+        setPacketParchiStatus('Enter a whole number of pages between 1 and 5000.', 'error');
+        packetParchiPageCountInput.focus();
+        return;
+    }
+
+    const originalButtonLabel = packetParchiGenerateBtn.textContent;
+    packetParchiGenerateBtn.disabled = true;
+    packetParchiGenerateBtn.textContent = 'Preparing PDF...';
+    setPacketParchiStatus(`Generating ${pageCount} packet parchi page${pageCount === 1 ? '' : 's'}...`, 'info');
+
+    try {
+        const pdfBlob = await buildPacketParchiPdfBlob(makerName, checkerName, pageCount);
+        const now = new Date();
+        const timestamp = [
+            now.getFullYear(),
+            String(now.getMonth() + 1).padStart(2, '0'),
+            String(now.getDate()).padStart(2, '0')
+        ].join('') + '_' + [
+            String(now.getHours()).padStart(2, '0'),
+            String(now.getMinutes()).padStart(2, '0'),
+            String(now.getSeconds()).padStart(2, '0')
+        ].join('');
+        const filename = `packet_parchi_${sanitizeFilePart(makerName)}_${sanitizeFilePart(checkerName)}_${timestamp}.pdf`;
+
+        downloadBlobFile(pdfBlob, filename);
+
+        if (packetParchiResultSection) {
+            packetParchiResultSection.style.display = 'block';
+        }
+
+        if (packetParchiResultSummary) {
+            packetParchiResultSummary.textContent = `Generated ${pageCount} page${pageCount === 1 ? '' : 's'} at 50 mm × 25 mm with ${makerName} on top and ${checkerName} on the bottom.`;
+        }
+
+        setPacketParchiStatus(`Generated ${pageCount} page${pageCount === 1 ? '' : 's'} and started the PDF download.`, 'success');
+    } catch (error) {
+        console.error('Error generating packet parchi PDF:', error);
+        setPacketParchiStatus(`Could not generate the packet parchi PDF: ${error.message}`, 'error');
+    } finally {
+        packetParchiGenerateBtn.disabled = false;
+        packetParchiGenerateBtn.textContent = originalButtonLabel;
+    }
+}
+
 function setupEventListeners() {
     // File input
     fileInput.addEventListener('change', handleFileSelect);
@@ -857,6 +1080,33 @@ function setupEventListeners() {
         if (e.target === editLabelsModal) {
             hideEditLabelsModal();
         }
+    });
+
+    if (packetParchiGenerateBtn) {
+        packetParchiGenerateBtn.addEventListener('click', generatePacketParchiPdf);
+    }
+
+    [packetParchiMakerInput, packetParchiCheckerInput].forEach(input => {
+        if (!input) return;
+
+        input.addEventListener('input', () => {
+            enforcePacketParchiUppercase(input);
+        });
+
+        input.addEventListener('blur', () => {
+            enforcePacketParchiUppercase(input);
+        });
+    });
+
+    [packetParchiMakerInput, packetParchiCheckerInput, packetParchiPageCountInput].forEach(input => {
+        if (!input) return;
+
+        input.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                generatePacketParchiPdf();
+            }
+        });
     });
 
     // ===============================

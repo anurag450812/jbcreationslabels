@@ -1095,6 +1095,7 @@ footer {
 .tab-nav {
     display: flex;
     justify-content: center;
+    flex-wrap: wrap;
     gap: 15px;
     margin-top: 25px;
 }
@@ -1132,6 +1133,104 @@ footer {
 .tab-content.active {
     display: block;
     animation: fadeIn 0.3s ease;
+}
+
+.packet-parchi-section,
+.packet-parchi-result-section {
+    margin-bottom: 20px;
+}
+
+.packet-parchi-card p {
+    margin-bottom: 20px;
+    color: var(--text-secondary);
+}
+
+.packet-parchi-specs {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 12px;
+    margin-bottom: 20px;
+}
+
+.packet-parchi-spec-item {
+    padding: 16px 18px;
+    border-radius: 12px;
+    border: 1px solid var(--border-color);
+    background: linear-gradient(135deg, #f8fafc 0%, #eef2ff 100%);
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+}
+
+.packet-parchi-spec-label {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.packet-parchi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 16px;
+}
+
+.packet-parchi-field {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.packet-parchi-field span {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.packet-parchi-field input {
+    width: 100%;
+    padding: 14px 16px;
+    border: 2px solid var(--border-color);
+    border-radius: 12px;
+    background: white;
+    color: var(--text-primary);
+    font-size: 1rem;
+    text-transform: uppercase;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.packet-parchi-field input:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 4px rgba(79, 70, 229, 0.12);
+}
+
+.packet-parchi-status {
+    margin-top: 20px;
+    padding: 14px 16px;
+    border-radius: 12px;
+    font-weight: 600;
+    text-align: center;
+}
+
+.packet-parchi-status-info {
+    background: #eff6ff;
+    color: #1d4ed8;
+    border: 1px solid #bfdbfe;
+}
+
+.packet-parchi-status-success {
+    background: #ecfdf5;
+    color: #047857;
+    border: 1px solid #a7f3d0;
+}
+
+.packet-parchi-status-error {
+    background: #fef2f2;
+    color: #b91c1c;
+    border: 1px solid #fecaca;
+}
+
+.packet-parchi-result-section p {
+    margin: 0;
+    color: var(--text-secondary);
 }
 
 /* Label Finder */
