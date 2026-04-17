@@ -881,19 +881,69 @@ function drawCenteredFittedText(page, text, font, startSize, minSize, maxWidth, 
     });
 }
 
-function drawPacketParchiSection(page, sectionTop, sectionBottom, value, boldFont, colors) {
-    const centerX = page.getWidth() / 2;
+function drawRotatedFittedText(page, text, font, startSize, minSize, sectionLeft, sectionRight, sectionTop, sectionBottom, color) {
+    let fontSize = startSize;
+    const safeText = String(text || '').trim();
+
+    if (!safeText) {
+        return;
+    }
+
+    const sectionWidth = sectionRight - sectionLeft;
     const sectionHeight = sectionTop - sectionBottom;
+    const maxTextLength = Math.max(sectionHeight - mmToPoints(1.6), mmToPoints(4));
+    const maxTextThickness = Math.max(sectionWidth - mmToPoints(1.2), mmToPoints(4));
+
+    while (
+        fontSize > minSize
+        && (
+            font.widthOfTextAtSize(safeText, fontSize) > maxTextLength
+            || font.heightAtSize(fontSize) > maxTextThickness
+        )
+    ) {
+        fontSize -= 0.5;
+    }
+
+    const textLength = font.widthOfTextAtSize(safeText, fontSize);
+    const textThickness = font.heightAtSize(fontSize);
+    const centerX = (sectionLeft + sectionRight) / 2;
     const centerY = (sectionTop + sectionBottom) / 2;
-    const maxTextWidth = page.getWidth() - mmToPoints(2.5);
-    const maxTextHeight = Math.max(sectionHeight - mmToPoints(1.2), mmToPoints(5));
+
+    page.drawText(safeText, {
+        x: centerX - (textThickness / 2),
+        y: centerY + (textLength / 2),
+        size: fontSize,
+        font,
+        color,
+        rotate: PDFLib.degrees(270)
+    });
+}
+
+function getPacketParchiDateParts(referenceDate = new Date()) {
+    const monthLabels = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+
+    return {
+        day: String(referenceDate.getDate()).padStart(2, '0'),
+        month: monthLabels[referenceDate.getMonth()]
+    };
+}
+
+function drawPacketParchiSection(page, sectionTop, sectionBottom, sectionLeft, sectionRight, value, boldFont, colors, options = {}) {
+    const centerX = (sectionLeft + sectionRight) / 2;
+    const sectionHeight = sectionTop - sectionBottom;
+    const sectionWidth = sectionRight - sectionLeft;
+    const centerY = (sectionTop + sectionBottom) / 2;
+    const horizontalPadding = mmToPoints(options.horizontalPaddingMm ?? 0.8);
+    const verticalPadding = mmToPoints(options.verticalPaddingMm ?? 0.8);
+    const maxTextWidth = Math.max(sectionWidth - (horizontalPadding * 2), mmToPoints(4));
+    const maxTextHeight = Math.max(sectionHeight - (verticalPadding * 2), mmToPoints(4));
 
     drawCenteredFittedText(
         page,
         value,
         boldFont,
-        30,
-        7,
+        options.startSize ?? 30,
+        options.minSize ?? 7,
         maxTextWidth,
         maxTextHeight,
         centerX,
@@ -902,7 +952,7 @@ function drawPacketParchiSection(page, sectionTop, sectionBottom, value, boldFon
     );
 }
 
-async function buildPacketParchiPdfBlob(makerName, checkerName, pageCount) {
+async function buildPacketParchiPdfBlob(makerName, checkerName, pageCount, labelDate = new Date()) {
     const { PDFDocument, StandardFonts, rgb } = PDFLib;
     const pdfDoc = await PDFDocument.create();
     const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
@@ -910,8 +960,13 @@ async function buildPacketParchiPdfBlob(makerName, checkerName, pageCount) {
     const pageHeight = mmToPoints(25);
     const gutter = mmToPoints(1.2);
     const dividerY = pageHeight / 2;
+    const leftColumnWidth = mmToPoints(10.5);
+    const separatorInset = mmToPoints(0.5);
+    const dateParts = getPacketParchiDateParts(labelDate);
+    const dateMonthLabel = `${dateParts.day} ${dateParts.month}`;
     const colors = {
         border: rgb(0.83, 0.87, 0.94),
+        separator: rgb(0.34, 0.38, 0.45),
         text: rgb(0.12, 0.16, 0.22)
     };
 
@@ -928,14 +983,53 @@ async function buildPacketParchiPdfBlob(makerName, checkerName, pageCount) {
         });
 
         page.drawLine({
-            start: { x: gutter, y: dividerY },
+            start: { x: leftColumnWidth, y: dividerY },
             end: { x: pageWidth - gutter, y: dividerY },
             thickness: 0.8,
-            color: colors.border
+            color: colors.separator
         });
 
-        drawPacketParchiSection(page, pageHeight - gutter, dividerY + 1, makerName, boldFont, colors);
-        drawPacketParchiSection(page, dividerY - 1, gutter, checkerName, boldFont, colors);
+        page.drawLine({
+            start: { x: leftColumnWidth, y: gutter },
+            end: { x: leftColumnWidth, y: pageHeight - gutter },
+            thickness: 0.8,
+            color: colors.separator
+        });
+
+        drawRotatedFittedText(
+            page,
+            dateMonthLabel,
+            boldFont,
+            20,
+            9,
+            gutter,
+            leftColumnWidth - separatorInset,
+            pageHeight - gutter,
+            gutter,
+            colors.text
+        );
+        drawPacketParchiSection(
+            page,
+            pageHeight - gutter,
+            dividerY + 1,
+            leftColumnWidth + separatorInset,
+            pageWidth - gutter,
+            makerName,
+            boldFont,
+            colors,
+            { startSize: 28, minSize: 7, horizontalPaddingMm: 1.2, verticalPaddingMm: 0.8 }
+        );
+        drawPacketParchiSection(
+            page,
+            dividerY - 1,
+            gutter,
+            leftColumnWidth + separatorInset,
+            pageWidth - gutter,
+            checkerName,
+            boldFont,
+            colors,
+            { startSize: 28, minSize: 7, horizontalPaddingMm: 1.2, verticalPaddingMm: 0.8 }
+        );
     }
 
     const pdfBytes = await pdfDoc.save();
@@ -981,8 +1075,9 @@ async function generatePacketParchiPdf() {
     setPacketParchiStatus(`Generating ${pageCount} packet parchi page${pageCount === 1 ? '' : 's'}...`, 'info');
 
     try {
-        const pdfBlob = await buildPacketParchiPdfBlob(makerName, checkerName, pageCount);
         const now = new Date();
+        const labelDate = getPacketParchiDateParts(now);
+        const pdfBlob = await buildPacketParchiPdfBlob(makerName, checkerName, pageCount, now);
         const timestamp = [
             now.getFullYear(),
             String(now.getMonth() + 1).padStart(2, '0'),
@@ -1001,7 +1096,7 @@ async function generatePacketParchiPdf() {
         }
 
         if (packetParchiResultSummary) {
-            packetParchiResultSummary.textContent = `Generated ${pageCount} page${pageCount === 1 ? '' : 's'} at 50 mm × 25 mm with ${makerName} on top and ${checkerName} on the bottom.`;
+            packetParchiResultSummary.textContent = `Generated ${pageCount} page${pageCount === 1 ? '' : 's'} at 50 mm × 25 mm with ${labelDate.day} ${labelDate.month} rotated on the left, ${makerName} on top, and ${checkerName} on the bottom.`;
         }
 
         setPacketParchiStatus(`Generated ${pageCount} page${pageCount === 1 ? '' : 's'} and started the PDF download.`, 'success');
