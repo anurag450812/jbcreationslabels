@@ -947,6 +947,52 @@ footer {
     text-align: center;
 }
 
+#finderUploadSection {
+    margin-top: 20px;
+    padding: 18px;
+    border-radius: 12px;
+    border: 1px solid var(--border-color);
+    background: linear-gradient(135deg, #f8fafc 0%, #eef2ff 100%);
+    text-align: left;
+}
+
+.finder-upload-section h4 {
+    margin-bottom: 10px;
+    color: var(--text-primary);
+}
+
+.finder-upload-progress-bar {
+    height: 18px;
+    margin-bottom: 10px;
+}
+
+.finder-upload-progress-bar .progress-fill {
+    font-size: 0.8rem;
+}
+
+.finder-upload-status-text {
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 500;
+}
+
+.finder-upload-status-neutral,
+.finder-upload-status-info {
+    color: var(--text-secondary);
+}
+
+.finder-upload-status-success {
+    color: var(--success-color);
+}
+
+.finder-upload-status-warning {
+    color: var(--warning-color);
+}
+
+.finder-upload-status-error {
+    color: var(--danger-color);
+}
+
 #stockUpdateStatus {
     padding: 12px 20px;
     border-radius: 8px;

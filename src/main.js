@@ -27,6 +27,7 @@ let mainWindow = null;
 let appTray = null;
 let isQuitting = false;
 let trayIconPromise = null;
+let closeGuardPromptOpen = false;
 
 function createTrayImageFallback() {
     const svg = `
@@ -120,8 +121,51 @@ function createWindow() {
         }
 
         event.preventDefault();
-        void ensureTray();
-        mainWindow.hide();
+
+        if (closeGuardPromptOpen || !mainWindow) {
+            return;
+        }
+
+        const targetWindow = mainWindow;
+        void (async () => {
+            let shouldConfirmPendingUpload = false;
+
+            try {
+                shouldConfirmPendingUpload = await targetWindow.webContents.executeJavaScript(
+                    'Boolean(window.__shouldWarnBeforeClose && window.__shouldWarnBeforeClose())',
+                    true
+                );
+            } catch (error) {
+                console.warn('Could not check pending Label Finder upload state:', error);
+            }
+
+            if (shouldConfirmPendingUpload) {
+                closeGuardPromptOpen = true;
+                try {
+                    const result = await dialog.showMessageBox(targetWindow, {
+                        type: 'warning',
+                        buttons: ['Keep Window Open', 'Hide Anyway'],
+                        defaultId: 0,
+                        cancelId: 0,
+                        title: 'Label Finder Upload Pending',
+                        message: 'Label Finder update is still pending.',
+                        detail: 'Hiding the window now can stop the sorted PDF from appearing in Label Finder. Keep the window open until the upload finishes.',
+                        noLink: true,
+                    });
+
+                    if (result.response === 0) {
+                        return;
+                    }
+                } finally {
+                    closeGuardPromptOpen = false;
+                }
+            }
+
+            if (!targetWindow.isDestroyed()) {
+                void ensureTray();
+                targetWindow.hide();
+            }
+        })();
     });
 
     mainWindow.on('closed', () => {

@@ -236,6 +236,9 @@ let finderCapturedForBatch = false; // Track finder capture state for current pr
 let currentProcessedBatchToken = '';
 let lastFinderCapturedBatchToken = '';
 let latestSortedPdfName = '';
+let pendingFinderCaptureJob = null;
+let finderUploadRetryTimer = null;
+let isStockUpdateInProgress = false;
 let skuAutomationSettingsUnlocked = false;
 let skuAutomationSettings = null;
 let skuAutomationSelectedFiles = [];
@@ -250,6 +253,7 @@ const LABEL_FINDER_LIMIT = 10;
 const LABEL_FINDER_CACHE = 'finder-pdf-cache-v1';
 const FINDER_CAN_USE_CACHE_API = false;
 const FINDER_COURIER_KEYS = ['ekart', 'xpressbees', 'shadowfax', 'delhivery', 'valmo'];
+const LABEL_FINDER_UPLOAD_RETRY_DELAYS_MS = [0, 1500, 4000, 8000];
 let finderEntries = [];
 let finderPdfCache = new Map();
 let finderIndex = [];
@@ -315,6 +319,162 @@ function setupDesktopWindowDropGuard() {
     window.addEventListener('drop', preventWindowFileDrop);
 }
 
+function clearFinderUploadRetryTimer() {
+    if (!finderUploadRetryTimer) {
+        return;
+    }
+
+    window.clearTimeout(finderUploadRetryTimer);
+    finderUploadRetryTimer = null;
+}
+
+function shouldWarnBeforeClose() {
+    return Boolean(pendingFinderCaptureJob)
+        && !['awaiting-stock', 'success'].includes(pendingFinderCaptureJob.status);
+}
+
+function handlePendingFinderBeforeUnload(event) {
+    if (!shouldWarnBeforeClose()) {
+        return undefined;
+    }
+
+    const message = 'Label Finder update is still pending. Closing now can stop the sorted PDF from appearing in Label Finder.';
+    event.preventDefault();
+    event.returnValue = message;
+    return message;
+}
+
+function renderFinderUploadStatus() {
+    if (!finderUploadSection || !finderUploadProgressFill || !finderUploadStatusText) {
+        return;
+    }
+
+    if (!processedPDF && !pendingFinderCaptureJob) {
+        finderUploadSection.style.display = 'none';
+        finderUploadProgressFill.style.width = '0%';
+        finderUploadProgressFill.textContent = '';
+        finderUploadStatusText.textContent = '';
+        finderUploadStatusText.className = 'finder-upload-status-text';
+        return;
+    }
+
+    let percent = 0;
+    let message = 'Label Finder upload will start after Google Sheets update.';
+    let tone = 'neutral';
+
+    if (pendingFinderCaptureJob) {
+        percent = Number.isFinite(pendingFinderCaptureJob.percent)
+            ? Math.max(0, Math.min(100, pendingFinderCaptureJob.percent))
+            : 0;
+
+        switch (pendingFinderCaptureJob.status) {
+            case 'running':
+                tone = 'info';
+                message = pendingFinderCaptureJob.message || 'Uploading sorted PDF to Label Finder...';
+                break;
+            case 'retrying':
+                tone = 'warning';
+                message = pendingFinderCaptureJob.message || 'Retrying Label Finder upload...';
+                break;
+            case 'failed':
+                tone = 'error';
+                percent = 0;
+                message = pendingFinderCaptureJob.message || 'Label Finder upload is still pending. Keep this page open and click Update Stock to retry.';
+                break;
+            case 'success':
+                tone = 'success';
+                percent = 100;
+                message = pendingFinderCaptureJob.message || 'Sorted PDF uploaded to Label Finder.';
+                break;
+            case 'awaiting-stock':
+            default:
+                tone = 'neutral';
+                percent = 0;
+                message = pendingFinderCaptureJob.message || 'Label Finder upload will start after Google Sheets update.';
+                break;
+        }
+    }
+
+    finderUploadSection.style.display = 'block';
+    finderUploadProgressFill.style.width = `${percent}%`;
+    finderUploadProgressFill.textContent = percent > 0 ? `${Math.round(percent)}%` : '';
+    finderUploadStatusText.textContent = message;
+    finderUploadStatusText.className = `finder-upload-status-text finder-upload-status-${tone}`;
+}
+
+function initializeFinderUploadForCurrentBatch() {
+    clearFinderUploadRetryTimer();
+
+    if (!currentProcessedBatchToken || !processedPDF) {
+        pendingFinderCaptureJob = null;
+        renderFinderUploadStatus();
+        return;
+    }
+
+    pendingFinderCaptureJob = {
+        batchToken: currentProcessedBatchToken,
+        fileName: latestSortedPdfName || `sorted_labels_${Date.now()}.pdf`,
+        pdfBytes: null,
+        attempts: 0,
+        maxAttempts: LABEL_FINDER_UPLOAD_RETRY_DELAYS_MS.length,
+        status: 'awaiting-stock',
+        percent: 0,
+        message: 'Label Finder upload will start after Google Sheets update.',
+        lastError: ''
+    };
+
+    renderFinderUploadStatus();
+}
+
+function setPendingFinderCaptureJob(patch) {
+    pendingFinderCaptureJob = {
+        ...(pendingFinderCaptureJob || {
+            batchToken: currentProcessedBatchToken,
+            fileName: latestSortedPdfName || `sorted_labels_${Date.now()}.pdf`,
+            pdfBytes: null,
+            attempts: 0,
+            maxAttempts: LABEL_FINDER_UPLOAD_RETRY_DELAYS_MS.length,
+            status: 'awaiting-stock',
+            percent: 0,
+            message: 'Label Finder upload will start after Google Sheets update.',
+            lastError: ''
+        }),
+        ...patch
+    };
+
+    renderFinderUploadStatus();
+    return pendingFinderCaptureJob;
+}
+
+async function ensureFinderCaptureSnapshot() {
+    if (!pendingFinderCaptureJob) {
+        initializeFinderUploadForCurrentBatch();
+    }
+
+    if (pendingFinderCaptureJob && pendingFinderCaptureJob.pdfBytes) {
+        return pendingFinderCaptureJob;
+    }
+
+    if (!processedPDF) {
+        throw new Error('Sorted PDF is no longer available. Please process the labels again.');
+    }
+
+    const attemptLabel = `Attempt ${Math.max(1, pendingFinderCaptureJob?.attempts || 1)}/${pendingFinderCaptureJob?.maxAttempts || LABEL_FINDER_UPLOAD_RETRY_DELAYS_MS.length}`;
+    setPendingFinderCaptureJob({
+        status: 'running',
+        percent: 12,
+        message: `${attemptLabel}: preparing sorted PDF for Label Finder...`
+    });
+
+    const pdfBytes = await processedPDF.save();
+    return setPendingFinderCaptureJob({
+        pdfBytes: new Uint8Array(pdfBytes),
+        fileName: latestSortedPdfName || pendingFinderCaptureJob.fileName || `sorted_labels_${Date.now()}.pdf`
+    });
+}
+
+window.__shouldWarnBeforeClose = shouldWarnBeforeClose;
+
 async function hashPassword(value) {
     const encoder = new TextEncoder();
     const digest = await crypto.subtle.digest('SHA-256', encoder.encode(String(value)));
@@ -369,6 +529,9 @@ const progressFill = document.getElementById('progressFill');
 const statusText = document.getElementById('statusText');
 const downloadBtn = document.getElementById('downloadBtn');
 const updateStockBtn = document.getElementById('updateStockBtn');
+const finderUploadSection = document.getElementById('finderUploadSection');
+const finderUploadProgressFill = document.getElementById('finderUploadProgressFill');
+const finderUploadStatusText = document.getElementById('finderUploadStatusText');
 const priorityList = document.getElementById('priorityList');
 const platformInfo = document.getElementById('platformInfo');
 const platformStats = document.getElementById('platformStats');
@@ -1142,6 +1305,10 @@ function setupEventListeners() {
     if (updateStockBtn) {
         updateStockBtn.addEventListener('click', updateStockToGoogleSheets);
     }
+
+    window.removeEventListener('beforeunload', handlePendingFinderBeforeUnload);
+    window.addEventListener('beforeunload', handlePendingFinderBeforeUnload);
+    window.__shouldWarnBeforeClose = shouldWarnBeforeClose;
     
     // Clear button
     clearBtn.addEventListener('click', clearFiles);
@@ -2321,7 +2488,9 @@ function copyCounterResults() {
 // ===============================
 
 function clearFiles() {
+    clearFinderUploadRetryTimer();
     uploadedFiles = [];
+    processedPDF = null;
     fileInput.value = '';
     processBtn.disabled = true;
     clearBtn.style.display = 'none';
@@ -2333,7 +2502,21 @@ function clearFiles() {
     stockAlreadyDeducted = false;
     finderCapturedForBatch = false;
     currentProcessedBatchToken = '';
+    latestSortedPdfName = '';
     labelOccurrences = {};
+    pendingFinderCaptureJob = null;
+    isStockUpdateInProgress = false;
+
+    if (updateStockBtn) {
+        updateStockBtn.disabled = false;
+    }
+
+    if (stockUpdateStatus) {
+        stockUpdateStatus.innerHTML = '';
+        stockUpdateStatus.style.display = 'none';
+    }
+
+    renderFinderUploadStatus();
     
     // Reset upload area text
     const uploadText = uploadArea.querySelector('h2');
@@ -2466,6 +2649,7 @@ async function processLabels() {
         // Create new PDF with sorted pages
         processedPDF = await createSortedPDF(outputPages, uploadedFiles);
         latestSortedPdfName = `sorted_labels_${new Date().getTime()}.pdf`;
+        initializeFinderUploadForCurrentBatch();
         
         updateProgress(100, 'Complete!');
         
@@ -3122,6 +3306,8 @@ function displayResults(total, matched, unmatched, labels, allPages, labelCounts
         const count = labelCounts[label] || 0;
         return `<span class="label-chip">${label} <span class="label-count">×${count}</span></span>`;
     }).join('');
+
+    renderFinderUploadStatus();
     
     // Show results section
     resultsSection.style.display = 'block';
@@ -3510,31 +3696,40 @@ async function updateStockToGoogleSheets() {
         return;
     }
 
-    const canCaptureForCurrentBatch = Boolean(currentProcessedBatchToken) && lastFinderCapturedBatchToken !== currentProcessedBatchToken;
-
-    if (stockAlreadyDeducted) {
-        if (!finderCapturedForBatch && canCaptureForCurrentBatch) {
-            const recovered = await captureFinderEntryFromCurrentBatch();
-            finderCapturedForBatch = recovered;
-            if (recovered) {
-                lastFinderCapturedBatchToken = currentProcessedBatchToken;
-            }
-        }
-        if (stockUpdateStatus) {
-            stockUpdateStatus.innerHTML = '<span class="status-success">✅ Stock already updated for this batch</span>';
-            stockUpdateStatus.style.display = 'block';
-        }
+    if (isStockUpdateInProgress) {
         return;
     }
 
-    const result = await deductStockFromGoogleSheets(labelOccurrences);
-    if (result.success) {
-        stockAlreadyDeducted = true;
-        if (canCaptureForCurrentBatch) {
-            finderCapturedForBatch = await captureFinderEntryFromCurrentBatch();
-            if (finderCapturedForBatch) {
-                lastFinderCapturedBatchToken = currentProcessedBatchToken;
+    isStockUpdateInProgress = true;
+    if (updateStockBtn) {
+        updateStockBtn.disabled = true;
+    }
+
+    try {
+        if (!pendingFinderCaptureJob || pendingFinderCaptureJob.batchToken !== currentProcessedBatchToken) {
+            initializeFinderUploadForCurrentBatch();
+        }
+
+        if (stockAlreadyDeducted) {
+            if (!finderCapturedForBatch) {
+                await captureFinderEntryFromCurrentBatch();
             }
+            if (stockUpdateStatus) {
+                stockUpdateStatus.innerHTML = '<span class="status-success">✅ Stock already updated for this batch</span>';
+                stockUpdateStatus.style.display = 'block';
+            }
+            return;
+        }
+
+        const result = await deductStockFromGoogleSheets(labelOccurrences);
+        if (result.success) {
+            stockAlreadyDeducted = true;
+            await captureFinderEntryFromCurrentBatch();
+        }
+    } finally {
+        isStockUpdateInProgress = false;
+        if (updateStockBtn) {
+            updateStockBtn.disabled = false;
         }
     }
 }
@@ -4090,7 +4285,7 @@ function extractTrackingCandidates(pageText) {
     return Array.from(candidates);
 }
 
-async function extractTrackingsFromSortedPdf(pdfBytes) {
+async function extractTrackingsFromSortedPdf(pdfBytes, onProgress) {
     const pdfDoc = await pdfjsLib.getDocument({ data: pdfBytes.slice(0) }).promise;
     const pageCount = pdfDoc.numPages;
     const trackingRecords = [];
@@ -4102,7 +4297,12 @@ async function extractTrackingsFromSortedPdf(pdfBytes) {
         const pageText = textContent.items.map(item => item.str || '').join(' ');
         const courierKey = detectFinderCourierKey(pageText);
         const hasLabelSignal = hasBarcodeLikeTextForSorter(String(pageText || '').toLowerCase()) || /AWB|TRACKING|SHIP(?:PING)?|PICKUP|DELIVERY|RETURN\s+TO/i.test(pageText);
-        if (!hasLabelSignal) continue;
+        if (!hasLabelSignal) {
+            if (typeof onProgress === 'function') {
+                onProgress({ pageNumber, pageCount });
+            }
+            continue;
+        }
 
         const candidates = extractTrackingCandidates(pageText);
         const labelPageIndex = pageNumber - 1;
@@ -4125,65 +4325,198 @@ async function extractTrackingsFromSortedPdf(pdfBytes) {
             seen.add(key);
             trackingRecords.push({ tracking, labelPageIndex, invoicePageIndex, courierKey });
         });
+
+        if (typeof onProgress === 'function') {
+            onProgress({ pageNumber, pageCount });
+        }
     }
 
     return { pageCount, trackingRecords };
 }
 
-async function captureFinderEntryFromCurrentBatch() {
-    if (!processedPDF) return false;
+async function syncFinderEntriesAfterSave() {
+    const entries = await getAllFinderEntries();
+    const sorted = entries.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    const keep = sorted.slice(0, LABEL_FINDER_LIMIT);
+    const remove = sorted.slice(LABEL_FINDER_LIMIT);
 
-    try {
-        const pdfBytes = await processedPDF.save();
-        const pdfBlob = new Blob([pdfBytes], { type: 'application/pdf' });
-        const { pageCount, trackingRecords } = await extractTrackingsFromSortedPdf(pdfBytes);
+    for (const oldEntry of remove) {
+        await deleteFinderEntry(oldEntry.id);
+        finderPdfCache.delete(oldEntry.id);
+    }
 
-        const createdAt = new Date().toISOString();
-        const entry = {
-            id: `finder_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
-            createdAt,
-            createdAtDisplay: formatFinderTimestamp(createdAt),
-            fileName: latestSortedPdfName || `sorted_labels_${Date.now()}.pdf`,
-            pageCount,
-            trackings: trackingRecords
-        };
-
-        await saveFinderEntryAndPdfWithEviction(entry, pdfBlob);
-
-        // Reload to keep state consistent with DB and enforce retention
-        const entries = await getAllFinderEntries();
-        const sorted = entries.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-        const keep = sorted.slice(0, LABEL_FINDER_LIMIT);
-        const remove = sorted.slice(LABEL_FINDER_LIMIT);
-
-        for (const oldEntry of remove) {
-            await deleteFinderEntry(oldEntry.id);
-            finderPdfCache.delete(oldEntry.id);
+    finderPdfCache.clear();
+    finderEntries = keep.map(item => {
+        if (item.pdfBlob) {
+            finderPdfCache.set(item.id, item.pdfBlob);
         }
+        return getFinderEntryMeta(item);
+    });
 
-        finderPdfCache.clear();
-        finderEntries = keep.map(item => {
-            if (item.pdfBlob) {
-                finderPdfCache.set(item.id, item.pdfBlob);
-            }
-            return getFinderEntryMeta(item);
+    buildFinderIndex();
+    renderFinderHistory();
+}
+
+function scheduleFinderCaptureRetry(error) {
+    if (!pendingFinderCaptureJob) {
+        return;
+    }
+
+    const errorMessage = error instanceof Error ? error.message : String(error || 'Unknown error');
+    const attempts = pendingFinderCaptureJob.attempts || 1;
+    const maxAttempts = pendingFinderCaptureJob.maxAttempts || LABEL_FINDER_UPLOAD_RETRY_DELAYS_MS.length;
+
+    if (attempts >= maxAttempts) {
+        setPendingFinderCaptureJob({
+            status: 'failed',
+            percent: 0,
+            lastError: errorMessage,
+            message: `Label Finder upload is still pending. Last error: ${errorMessage}. Keep this page open and click Update Stock to retry.`
         });
+        return;
+    }
 
-        buildFinderIndex();
-        renderFinderHistory();
+    const delay = LABEL_FINDER_UPLOAD_RETRY_DELAYS_MS[Math.min(attempts, LABEL_FINDER_UPLOAD_RETRY_DELAYS_MS.length - 1)] || 1500;
+    setPendingFinderCaptureJob({
+        status: 'retrying',
+        percent: Math.max(pendingFinderCaptureJob.percent || 0, 18),
+        lastError: errorMessage,
+        message: `Label Finder upload failed (${errorMessage}). Retrying in ${Math.ceil(delay / 1000)}s...`
+    });
 
-        if (finderSearchHelp) {
-            finderSearchHelp.textContent = '';
-        }
-        return true;
-    } catch (error) {
-        console.error('Failed to capture finder entry:', error);
-        if (finderSearchHelp) {
-            finderSearchHelp.textContent = '';
-        }
-        alert(`Label Finder history save failed: ${error.message}`);
+    clearFinderUploadRetryTimer();
+    finderUploadRetryTimer = window.setTimeout(() => {
+        finderUploadRetryTimer = null;
+        void runPendingFinderCapture();
+    }, delay);
+}
+
+async function runPendingFinderCapture() {
+    if (!pendingFinderCaptureJob) {
+        initializeFinderUploadForCurrentBatch();
+    }
+
+    if (!pendingFinderCaptureJob) {
         return false;
     }
+
+    if (pendingFinderCaptureJob.status === 'running') {
+        return false;
+    }
+
+    if (pendingFinderCaptureJob.status === 'success') {
+        return true;
+    }
+
+    clearFinderUploadRetryTimer();
+
+    const nextAttempt = (pendingFinderCaptureJob.attempts || 0) + 1;
+    const maxAttempts = pendingFinderCaptureJob.maxAttempts || LABEL_FINDER_UPLOAD_RETRY_DELAYS_MS.length;
+    setPendingFinderCaptureJob({
+        attempts: nextAttempt,
+        maxAttempts,
+        status: 'running',
+        percent: 5,
+        lastError: '',
+        message: `Attempt ${nextAttempt}/${maxAttempts}: starting Label Finder upload...`
+    });
+
+    try {
+        const job = await ensureFinderCaptureSnapshot();
+        const saved = await captureFinderEntryFromJob(job);
+        finderCapturedForBatch = saved;
+        if (saved) {
+            lastFinderCapturedBatchToken = job.batchToken || currentProcessedBatchToken;
+        }
+        return saved;
+    } catch (error) {
+        console.error('Failed to capture finder entry:', error);
+        finderCapturedForBatch = false;
+        if (finderSearchHelp) {
+            finderSearchHelp.textContent = '';
+        }
+        scheduleFinderCaptureRetry(error);
+        return false;
+    }
+}
+
+async function captureFinderEntryFromCurrentBatch() {
+    if (!processedPDF) {
+        return false;
+    }
+
+    if (!pendingFinderCaptureJob || pendingFinderCaptureJob.batchToken !== currentProcessedBatchToken) {
+        initializeFinderUploadForCurrentBatch();
+    } else if (pendingFinderCaptureJob.status === 'failed') {
+        setPendingFinderCaptureJob({
+            status: 'awaiting-stock',
+            percent: 0,
+            attempts: 0,
+            lastError: '',
+            message: 'Retrying Label Finder upload...'
+        });
+    }
+
+    return await runPendingFinderCapture();
+}
+
+async function captureFinderEntryFromJob(job) {
+    const attemptLabel = `Attempt ${job.attempts}/${job.maxAttempts}`;
+    const pdfBytes = job.pdfBytes instanceof Uint8Array ? job.pdfBytes : new Uint8Array(job.pdfBytes || []);
+    const pdfBlob = new Blob([pdfBytes], { type: 'application/pdf' });
+
+    setPendingFinderCaptureJob({
+        status: 'running',
+        percent: 22,
+        message: `${attemptLabel}: reading sorted PDF for Label Finder...`
+    });
+
+    const { pageCount, trackingRecords } = await extractTrackingsFromSortedPdf(pdfBytes, ({ pageNumber, pageCount: totalPages }) => {
+        const percent = 22 + ((pageNumber / Math.max(totalPages, 1)) * 50);
+        setPendingFinderCaptureJob({
+            status: 'running',
+            percent,
+            message: `${attemptLabel}: scanning labels ${pageNumber}/${totalPages} for tracking numbers...`
+        });
+    });
+
+    const createdAt = new Date().toISOString();
+    const entry = {
+        id: `finder_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+        createdAt,
+        createdAtDisplay: formatFinderTimestamp(createdAt),
+        fileName: job.fileName || latestSortedPdfName || `sorted_labels_${Date.now()}.pdf`,
+        pageCount,
+        trackings: trackingRecords
+    };
+
+    setPendingFinderCaptureJob({
+        status: 'running',
+        percent: 82,
+        message: `${attemptLabel}: saving sorted PDF to Label Finder...`
+    });
+    await saveFinderEntryAndPdfWithEviction(entry, pdfBlob);
+
+    setPendingFinderCaptureJob({
+        status: 'running',
+        percent: 94,
+        message: `${attemptLabel}: refreshing Label Finder index...`
+    });
+    await syncFinderEntriesAfterSave();
+
+    if (finderSearchHelp) {
+        finderSearchHelp.textContent = '';
+    }
+
+    setPendingFinderCaptureJob({
+        status: 'success',
+        percent: 100,
+        message: trackingRecords.length > 0
+            ? `Sorted PDF uploaded to Label Finder. ${trackingRecords.length} tracking number${trackingRecords.length === 1 ? '' : 's'} indexed.`
+            : 'Sorted PDF uploaded to Label Finder. No tracking numbers were detected in this batch.'
+    });
+
+    return true;
 }
 
 function getFinderEntryById(entryId) {
