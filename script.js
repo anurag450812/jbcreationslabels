@@ -589,6 +589,12 @@ const packetParchiMakerInput = document.getElementById('packetParchiMakerName');
 const packetParchiCheckerInput = document.getElementById('packetParchiCheckerName');
 const packetParchiPageCountInput = document.getElementById('packetParchiPageCount');
 const packetParchiGenerateBtn = document.getElementById('packetParchiGenerateBtn');
+const packetParchiDateBtn = document.getElementById('packetParchiDateBtn');
+const packetParchiDateModal = document.getElementById('packetParchiDateModal');
+const packetParchiDateCountInput = document.getElementById('packetParchiDateCount');
+const packetParchiDateCancelBtn = document.getElementById('packetParchiDateCancelBtn');
+const packetParchiDateConfirmBtn = document.getElementById('packetParchiDateConfirmBtn');
+const packetParchiDateModalError = document.getElementById('packetParchiDateModalError');
 const packetParchiStatus = document.getElementById('packetParchiStatus');
 const packetParchiResultSection = document.getElementById('packetParchiResultSection');
 const packetParchiResultSummary = document.getElementById('packetParchiResultSummary');
@@ -994,6 +1000,70 @@ function setPacketParchiStatus(message, type = 'info') {
     packetParchiStatus.style.display = 'block';
 }
 
+function setPacketParchiDateModalError(message = '') {
+    if (!packetParchiDateModalError) return;
+
+    packetParchiDateModalError.textContent = message;
+    packetParchiDateModalError.style.display = message ? 'block' : 'none';
+}
+
+function parsePacketParchiPageCount(value) {
+    const pageCount = Number.parseInt(value, 10);
+
+    if (!Number.isInteger(pageCount) || pageCount < 1 || pageCount > 5000) {
+        return null;
+    }
+
+    return pageCount;
+}
+
+function formatPacketParchiTimestamp(referenceDate = new Date()) {
+    return [
+        referenceDate.getFullYear(),
+        String(referenceDate.getMonth() + 1).padStart(2, '0'),
+        String(referenceDate.getDate()).padStart(2, '0')
+    ].join('') + '_' + [
+        String(referenceDate.getHours()).padStart(2, '0'),
+        String(referenceDate.getMinutes()).padStart(2, '0'),
+        String(referenceDate.getSeconds()).padStart(2, '0')
+    ].join('');
+}
+
+function showPacketParchiResult(message) {
+    if (packetParchiResultSection) {
+        packetParchiResultSection.style.display = 'block';
+    }
+
+    if (packetParchiResultSummary) {
+        packetParchiResultSummary.textContent = message;
+    }
+}
+
+function showPacketParchiDateModal() {
+    if (!packetParchiDateModal || !packetParchiDateCountInput) {
+        return;
+    }
+
+    const currentPageCount = parsePacketParchiPageCount(packetParchiPageCountInput?.value);
+    packetParchiDateCountInput.value = String(currentPageCount || 1);
+    setPacketParchiDateModalError('');
+    packetParchiDateModal.style.display = 'flex';
+
+    requestAnimationFrame(() => {
+        packetParchiDateCountInput.focus();
+        packetParchiDateCountInput.select();
+    });
+}
+
+function hidePacketParchiDateModal() {
+    if (!packetParchiDateModal) {
+        return;
+    }
+
+    packetParchiDateModal.style.display = 'none';
+    setPacketParchiDateModalError('');
+}
+
 function normalizePacketParchiName(value) {
     return String(value || '').trim().toLocaleUpperCase();
 }
@@ -1115,7 +1185,7 @@ function drawPacketParchiSection(page, sectionTop, sectionBottom, sectionLeft, s
     );
 }
 
-async function buildPacketParchiPdfBlob(makerName, checkerName, pageCount, labelDate = new Date()) {
+async function buildPacketParchiPdfBlob(makerName, checkerName, pageCount, labelDate = new Date(), options = {}) {
     const { PDFDocument, StandardFonts, rgb } = PDFLib;
     const pdfDoc = await PDFDocument.create();
     const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
@@ -1125,6 +1195,8 @@ async function buildPacketParchiPdfBlob(makerName, checkerName, pageCount, label
     const dividerY = pageHeight / 2;
     const leftColumnWidth = mmToPoints(10.5);
     const separatorInset = mmToPoints(0.5);
+    const includeMakerChecker = options.includeMakerChecker !== false;
+    const dateScale = Number.isFinite(options.dateScale) && options.dateScale > 0 ? options.dateScale : 1;
     const dateParts = getPacketParchiDateParts(labelDate);
     const dateMonthLabel = `${dateParts.day} ${dateParts.month}`;
     const colors = {
@@ -1145,12 +1217,14 @@ async function buildPacketParchiPdfBlob(makerName, checkerName, pageCount, label
             borderWidth: 1
         });
 
-        page.drawLine({
-            start: { x: leftColumnWidth, y: dividerY },
-            end: { x: pageWidth - gutter, y: dividerY },
-            thickness: 0.8,
-            color: colors.separator
-        });
+        if (includeMakerChecker) {
+            page.drawLine({
+                start: { x: leftColumnWidth, y: dividerY },
+                end: { x: pageWidth - gutter, y: dividerY },
+                thickness: 0.8,
+                color: colors.separator
+            });
+        }
 
         page.drawLine({
             start: { x: leftColumnWidth, y: gutter },
@@ -1163,36 +1237,39 @@ async function buildPacketParchiPdfBlob(makerName, checkerName, pageCount, label
             page,
             dateMonthLabel,
             boldFont,
-            20,
-            9,
+            20 * dateScale,
+            9 * dateScale,
             gutter,
             leftColumnWidth - separatorInset,
             pageHeight - gutter,
             gutter,
             colors.text
         );
-        drawPacketParchiSection(
-            page,
-            pageHeight - gutter,
-            dividerY + 1,
-            leftColumnWidth + separatorInset,
-            pageWidth - gutter,
-            makerName,
-            boldFont,
-            colors,
-            { startSize: 28, minSize: 7, horizontalPaddingMm: 1.2, verticalPaddingMm: 0.8 }
-        );
-        drawPacketParchiSection(
-            page,
-            dividerY - 1,
-            gutter,
-            leftColumnWidth + separatorInset,
-            pageWidth - gutter,
-            checkerName,
-            boldFont,
-            colors,
-            { startSize: 28, minSize: 7, horizontalPaddingMm: 1.2, verticalPaddingMm: 0.8 }
-        );
+
+        if (includeMakerChecker) {
+            drawPacketParchiSection(
+                page,
+                pageHeight - gutter,
+                dividerY + 1,
+                leftColumnWidth + separatorInset,
+                pageWidth - gutter,
+                makerName,
+                boldFont,
+                colors,
+                { startSize: 28, minSize: 7, horizontalPaddingMm: 1.2, verticalPaddingMm: 0.8 }
+            );
+            drawPacketParchiSection(
+                page,
+                dividerY - 1,
+                gutter,
+                leftColumnWidth + separatorInset,
+                pageWidth - gutter,
+                checkerName,
+                boldFont,
+                colors,
+                { startSize: 28, minSize: 7, horizontalPaddingMm: 1.2, verticalPaddingMm: 0.8 }
+            );
+        }
     }
 
     const pdfBytes = await pdfDoc.save();
@@ -1209,7 +1286,7 @@ async function generatePacketParchiPdf() {
 
     const makerName = normalizePacketParchiName(packetParchiMakerInput.value);
     const checkerName = normalizePacketParchiName(packetParchiCheckerInput.value);
-    const pageCount = Number.parseInt(packetParchiPageCountInput.value, 10);
+    const pageCount = parsePacketParchiPageCount(packetParchiPageCountInput.value);
 
     packetParchiMakerInput.value = makerName;
     packetParchiCheckerInput.value = checkerName;
@@ -1226,7 +1303,7 @@ async function generatePacketParchiPdf() {
         return;
     }
 
-    if (!Number.isInteger(pageCount) || pageCount < 1 || pageCount > 5000) {
+    if (pageCount === null) {
         setPacketParchiStatus('Enter a whole number of pages between 1 and 5000.', 'error');
         packetParchiPageCountInput.focus();
         return;
@@ -1241,26 +1318,12 @@ async function generatePacketParchiPdf() {
         const now = new Date();
         const labelDate = getPacketParchiDateParts(now);
         const pdfBlob = await buildPacketParchiPdfBlob(makerName, checkerName, pageCount, now);
-        const timestamp = [
-            now.getFullYear(),
-            String(now.getMonth() + 1).padStart(2, '0'),
-            String(now.getDate()).padStart(2, '0')
-        ].join('') + '_' + [
-            String(now.getHours()).padStart(2, '0'),
-            String(now.getMinutes()).padStart(2, '0'),
-            String(now.getSeconds()).padStart(2, '0')
-        ].join('');
+        const timestamp = formatPacketParchiTimestamp(now);
         const filename = `packet_parchi_${sanitizeFilePart(makerName)}_${sanitizeFilePart(checkerName)}_${timestamp}.pdf`;
 
         downloadBlobFile(pdfBlob, filename);
 
-        if (packetParchiResultSection) {
-            packetParchiResultSection.style.display = 'block';
-        }
-
-        if (packetParchiResultSummary) {
-            packetParchiResultSummary.textContent = `Generated ${pageCount} page${pageCount === 1 ? '' : 's'} at 50 mm × 25 mm with ${labelDate.day} ${labelDate.month} rotated on the left, ${makerName} on top, and ${checkerName} on the bottom.`;
-        }
+        showPacketParchiResult(`Generated ${pageCount} page${pageCount === 1 ? '' : 's'} at 50 mm × 25 mm with ${labelDate.day} ${labelDate.month} rotated on the left, ${makerName} on top, and ${checkerName} on the bottom.`);
 
         setPacketParchiStatus(`Generated ${pageCount} page${pageCount === 1 ? '' : 's'} and started the PDF download.`, 'success');
     } catch (error) {
@@ -1269,6 +1332,67 @@ async function generatePacketParchiPdf() {
     } finally {
         packetParchiGenerateBtn.disabled = false;
         packetParchiGenerateBtn.textContent = originalButtonLabel;
+    }
+}
+
+async function generateDateParchiPdf() {
+    if (!packetParchiDateCountInput || !packetParchiDateConfirmBtn) {
+        return;
+    }
+
+    const pageCount = parsePacketParchiPageCount(packetParchiDateCountInput.value);
+
+    if (pageCount === null) {
+        setPacketParchiDateModalError('Enter a whole number of pages between 1 and 5000.');
+        packetParchiDateCountInput.focus();
+        return;
+    }
+
+    packetParchiDateCountInput.value = String(pageCount);
+
+    if (packetParchiPageCountInput) {
+        packetParchiPageCountInput.value = String(pageCount);
+    }
+
+    const originalConfirmLabel = packetParchiDateConfirmBtn.textContent;
+    const originalTriggerLabel = packetParchiDateBtn ? packetParchiDateBtn.textContent : '';
+
+    packetParchiDateConfirmBtn.disabled = true;
+    packetParchiDateConfirmBtn.textContent = 'Preparing PDF...';
+
+    if (packetParchiDateBtn) {
+        packetParchiDateBtn.disabled = true;
+        packetParchiDateBtn.textContent = 'Preparing...';
+    }
+
+    setPacketParchiDateModalError('');
+    setPacketParchiStatus(`Generating ${pageCount} date parchi page${pageCount === 1 ? '' : 's'}...`, 'info');
+
+    try {
+        const now = new Date();
+        const labelDate = getPacketParchiDateParts(now);
+        const pdfBlob = await buildPacketParchiPdfBlob('', '', pageCount, now, {
+            includeMakerChecker: false,
+            dateScale: 1
+        });
+        const filename = `date_parchi_${formatPacketParchiTimestamp(now)}.pdf`;
+
+        downloadBlobFile(pdfBlob, filename);
+        hidePacketParchiDateModal();
+        showPacketParchiResult(`Generated ${pageCount} date parchi page${pageCount === 1 ? '' : 's'} at 50 mm × 25 mm with today's date ${labelDate.day} ${labelDate.month} on every label in the same rotated left position as the regular packet parchi.`);
+        setPacketParchiStatus(`Generated ${pageCount} date parchi page${pageCount === 1 ? '' : 's'} and started the PDF download.`, 'success');
+    } catch (error) {
+        console.error('Error generating date parchi PDF:', error);
+        setPacketParchiStatus(`Could not generate the date parchi PDF: ${error.message}`, 'error');
+        setPacketParchiDateModalError(`Could not generate the PDF: ${error.message}`);
+    } finally {
+        packetParchiDateConfirmBtn.disabled = false;
+        packetParchiDateConfirmBtn.textContent = originalConfirmLabel;
+
+        if (packetParchiDateBtn) {
+            packetParchiDateBtn.disabled = false;
+            packetParchiDateBtn.textContent = originalTriggerLabel;
+        }
     }
 }
 
@@ -1348,6 +1472,26 @@ function setupEventListeners() {
         packetParchiGenerateBtn.addEventListener('click', generatePacketParchiPdf);
     }
 
+    if (packetParchiDateBtn) {
+        packetParchiDateBtn.addEventListener('click', showPacketParchiDateModal);
+    }
+
+    if (packetParchiDateCancelBtn) {
+        packetParchiDateCancelBtn.addEventListener('click', hidePacketParchiDateModal);
+    }
+
+    if (packetParchiDateConfirmBtn) {
+        packetParchiDateConfirmBtn.addEventListener('click', generateDateParchiPdf);
+    }
+
+    if (packetParchiDateModal) {
+        packetParchiDateModal.addEventListener('click', (event) => {
+            if (event.target === packetParchiDateModal && !packetParchiDateConfirmBtn?.disabled) {
+                hidePacketParchiDateModal();
+            }
+        });
+    }
+
     [packetParchiMakerInput, packetParchiCheckerInput].forEach(input => {
         if (!input) return;
 
@@ -1370,6 +1514,20 @@ function setupEventListeners() {
             }
         });
     });
+
+    if (packetParchiDateCountInput) {
+        packetParchiDateCountInput.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                generateDateParchiPdf();
+            }
+
+            if (event.key === 'Escape' && !packetParchiDateConfirmBtn?.disabled) {
+                event.preventDefault();
+                hidePacketParchiDateModal();
+            }
+        });
+    }
 
     // ===============================
     // LABEL COUNTER EVENT LISTENERS

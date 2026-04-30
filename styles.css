@@ -546,6 +546,7 @@ summary:hover {
     box-shadow: var(--shadow-lg);
     max-width: 500px;
     width: 90%;
+    box-sizing: border-box;
     animation: slideIn 0.3s ease;
 }
 
@@ -1186,6 +1187,23 @@ footer {
     margin-bottom: 20px;
 }
 
+.packet-parchi-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+}
+
+.packet-parchi-header h3 {
+    margin: 0;
+}
+
+.packet-parchi-header-btn {
+    white-space: nowrap;
+}
+
 .packet-parchi-card p {
     margin-bottom: 20px;
     color: var(--text-secondary);
@@ -1277,6 +1295,36 @@ footer {
 .packet-parchi-result-section p {
     margin: 0;
     color: var(--text-secondary);
+}
+
+.packet-parchi-date-modal-content {
+    max-width: 420px;
+}
+
+.packet-parchi-date-modal-field {
+    margin-bottom: 20px;
+}
+
+.packet-parchi-date-modal-content .modal-buttons {
+    flex-wrap: wrap;
+}
+
+.packet-parchi-date-modal-content .modal-buttons .btn {
+    min-width: 0;
+}
+
+.packet-parchi-date-modal-content input[type="number"] {
+    width: 100%;
+    padding: 15px;
+    border: 2px solid var(--border-color);
+    border-radius: 10px;
+    font-size: 1rem;
+    box-sizing: border-box;
+}
+
+.packet-parchi-date-modal-content input[type="number"]:focus {
+    outline: none;
+    border-color: var(--primary-color);
 }
 
 /* Label Finder */

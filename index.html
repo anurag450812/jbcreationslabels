@@ -368,7 +368,12 @@
             <div id="packet-parchi-tab-content" class="tab-content">
                 <section class="packet-parchi-section">
                     <div class="results-card packet-parchi-card">
-                        <h3>🧾 Packet Parchi PDF</h3>
+                        <div class="packet-parchi-header">
+                            <h3>🧾 Packet Parchi PDF</h3>
+                            <button class="btn btn-secondary packet-parchi-header-btn" id="packetParchiDateBtn" type="button">
+                                Date parchi
+                            </button>
+                        </div>
                         <p>Create a multi-page packet parchi PDF. Every page uses a 50 mm horizontal width and 25 mm vertical height, with today's date and month printed as one larger rotated line on the left, the maker name on the top-right, and the checker name on the bottom-right, separated by guide lines for clear printing.</p>
 
                         <div class="packet-parchi-specs">
@@ -417,6 +422,21 @@
                 </section>
             </div>
             <!-- END PACKET PARCHI TAB CONTENT -->
+
+            <!-- Date Parchi Modal -->
+            <div class="modal" id="packetParchiDateModal" style="display: none;" role="dialog" aria-modal="true" aria-label="Date Parchi">
+                <div class="modal-content packet-parchi-date-modal-content">
+                    <label class="packet-parchi-field packet-parchi-date-modal-field" for="packetParchiDateCount">
+                        <span>Number of pages</span>
+                        <input type="number" id="packetParchiDateCount" min="1" max="5000" step="1" value="1">
+                    </label>
+                    <div class="modal-buttons">
+                        <button class="btn btn-secondary" id="packetParchiDateCancelBtn" type="button">Cancel</button>
+                        <button class="btn btn-primary" id="packetParchiDateConfirmBtn" type="button">Confirm</button>
+                    </div>
+                    <p class="error-message" id="packetParchiDateModalError" style="display: none;"></p>
+                </div>
+            </div>
 
             <!-- SKU AUTOMATION TAB CONTENT -->
             <div id="sku-automation-tab-content" class="tab-content">
