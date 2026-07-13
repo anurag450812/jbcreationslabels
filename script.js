@@ -603,6 +603,27 @@ const deviceAuthInput = document.getElementById('deviceAuthInput');
 const deviceAuthSubmitBtn = document.getElementById('deviceAuthSubmitBtn');
 const deviceAuthError = document.getElementById('deviceAuthError');
 
+// Return Extractor DOM Elements
+const returnExtractorUploadArea = document.getElementById('returnExtractorUploadArea');
+const returnExtractorFileInput = document.getElementById('returnExtractorFileInput');
+const returnExtractorClearBtn = document.getElementById('returnExtractorClearBtn');
+const returnExtractorProcessBtn = document.getElementById('returnExtractorProcessBtn');
+const returnExtractorFilesInfo = document.getElementById('returnExtractorFilesInfo');
+const returnExtractorFilesList = document.getElementById('returnExtractorFilesList');
+const returnExtractorDateInput = document.getElementById('returnExtractorDateInput');
+const returnExtractorStatusSection = document.getElementById('returnExtractorStatusSection');
+const returnExtractorProgressFill = document.getElementById('returnExtractorProgressFill');
+const returnExtractorStatusText = document.getElementById('returnExtractorStatusText');
+const returnExtractorResultsSection = document.getElementById('returnExtractorResultsSection');
+const returnExtractorTotalReturns = document.getElementById('returnExtractorTotalReturns');
+const returnExtractorUniqueCouriers = document.getElementById('returnExtractorUniqueCouriers');
+const returnExtractorTextOutput = document.getElementById('returnExtractorTextOutput');
+const copyReturnExtractorBtn = document.getElementById('copyReturnExtractorBtn');
+const returnExtractorCopyFeedback = document.getElementById('returnExtractorCopyFeedback');
+const returnExtractorPerFileBreakdown = document.getElementById('returnExtractorPerFileBreakdown');
+
+let returnExtractorUploadedFiles = [];
+
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
     initializeDeviceAccess();
@@ -768,7 +789,7 @@ function initializeApp() {
     
     // Restore active tab from localStorage
     const savedTab = isDesktopApp() ? 'sku-automation' : localStorage.getItem('activeTab');
-    if (savedTab && (savedTab === 'sorting' || savedTab === 'counter' || savedTab === 'cropping' || savedTab === 'finder' || savedTab === 'packet-parchi' || savedTab === 'sku-automation')) {
+    if (savedTab && (savedTab === 'sorting' || savedTab === 'counter' || savedTab === 'cropping' || savedTab === 'finder' || savedTab === 'packet-parchi' || savedTab === 'sku-automation' || savedTab === 'return-extractor')) {
         switchTab(savedTab);
     }
     
@@ -1580,6 +1601,48 @@ function setupEventListeners() {
     
     // Copy results button
     copyCounterResultsBtn.addEventListener('click', copyCounterResults);
+
+    // ===============================
+    // RETURN EXTRACTOR EVENT LISTENERS
+    // ===============================
+
+    if (returnExtractorFileInput) {
+        returnExtractorFileInput.addEventListener('change', handleReturnExtractorFileSelect);
+    }
+
+    if (returnExtractorUploadArea) {
+        returnExtractorUploadArea.addEventListener('click', () => returnExtractorFileInput.click());
+
+        returnExtractorUploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            returnExtractorUploadArea.classList.add('dragover');
+        });
+
+        returnExtractorUploadArea.addEventListener('dragleave', () => {
+            returnExtractorUploadArea.classList.remove('dragover');
+        });
+
+        returnExtractorUploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            returnExtractorUploadArea.classList.remove('dragover');
+            const files = getDroppedFiles(e.dataTransfer, isCsvLikeFile);
+            if (files.length > 0) {
+                handleReturnExtractorFiles(files);
+            }
+        });
+    }
+
+    if (returnExtractorClearBtn) {
+        returnExtractorClearBtn.addEventListener('click', clearReturnExtractorFiles);
+    }
+
+    if (returnExtractorProcessBtn) {
+        returnExtractorProcessBtn.addEventListener('click', processReturnExtractorData);
+    }
+
+    if (copyReturnExtractorBtn) {
+        copyReturnExtractorBtn.addEventListener('click', copyReturnExtractorResults);
+    }
 
     // Label finder
     if (finderSearchInput) {
@@ -7578,3 +7641,292 @@ async function downloadAllCropped() {
 }
 
 // Cropping tab initialization runs through startApplicationOnce() after device verification.
+
+// ==================================================================
+// RETURN EXTRACTOR FUNCTIONS
+// ==================================================================
+
+function isCsvLikeFile(file) {
+    const fileName = file?.name || file?.path || '';
+    const fileType = String(file?.type || '').toLowerCase();
+    return matchesFileExtension(fileName, /\.csv$/i)
+        || fileType === 'text/csv'
+        || fileType === 'application/vnd.ms-excel'
+        || fileType === '';
+}
+
+function handleReturnExtractorFileSelect(e) {
+    const files = Array.from(e.target.files);
+    if (files.length > 0) {
+        handleReturnExtractorFiles(files);
+    }
+}
+
+function handleReturnExtractorFiles(files) {
+    const existingFileNames = new Set(returnExtractorUploadedFiles.map(f => f.name));
+    const newFiles = files.filter(f => !existingFileNames.has(f.name));
+    returnExtractorUploadedFiles = [...returnExtractorUploadedFiles, ...newFiles];
+
+    if (returnExtractorUploadedFiles.length > 0) {
+        returnExtractorProcessBtn.disabled = false;
+        returnExtractorClearBtn.style.display = 'inline-flex';
+        updateUploadAreaCopy(returnExtractorUploadArea, `${returnExtractorUploadedFiles.length} file(s) ready`, 'Drop more files or click to add more');
+        displayReturnExtractorFilesInfo();
+    }
+}
+
+function displayReturnExtractorFilesInfo() {
+    returnExtractorFilesInfo.style.display = 'block';
+    returnExtractorFilesList.innerHTML = returnExtractorUploadedFiles.map(file =>
+        `<div class="return-extractor-file-item">📄 ${file.name}</div>`
+    ).join('');
+}
+
+function clearReturnExtractorFiles() {
+    returnExtractorUploadedFiles = [];
+    returnExtractorFileInput.value = '';
+    returnExtractorFilesInfo.style.display = 'none';
+    returnExtractorResultsSection.style.display = 'none';
+    returnExtractorStatusSection.style.display = 'none';
+    returnExtractorProcessBtn.disabled = true;
+    returnExtractorClearBtn.style.display = 'none';
+    updateUploadAreaCopy(returnExtractorUploadArea, 'Drop your CSV return files here', 'or click to browse (supports multiple CSV files)');
+}
+
+function parseReturnExtractorCSV(text) {
+    const lines = text.split(/\r?\n/);
+    if (lines.length < 8) return { header: [], data: [], headerRowIndex: -1 };
+
+    let headerRowIndex = -1;
+    for (let i = 0; i < Math.min(lines.length, 15); i++) {
+        if (lines[i].includes('"S No"') || lines[i].includes('S No')) {
+            headerRowIndex = i;
+            break;
+        }
+    }
+
+    if (headerRowIndex === -1) {
+        for (let i = 0; i < Math.min(lines.length, 15); i++) {
+            const trimmed = lines[i].trim();
+            if (trimmed && trimmed.includes(',')) {
+                headerRowIndex = i;
+                break;
+            }
+        }
+    }
+
+    if (headerRowIndex === -1) return { header: [], data: [], headerRowIndex: -1 };
+
+    const headerLine = lines[headerRowIndex];
+    const header = parseCSVLine(headerLine);
+
+    const data = [];
+    for (let i = headerRowIndex + 1; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        const values = parseCSVLine(line);
+        if (values.length >= header.length) {
+            const row = {};
+            header.forEach((col, idx) => {
+                row[col.trim()] = (values[idx] || '').trim();
+            });
+            data.push(row);
+        }
+    }
+
+    return { header, data, headerRowIndex };
+}
+
+function parseCSVLine(line) {
+    const result = [];
+    let current = '';
+    let inQuotes = false;
+
+    for (let i = 0; i < line.length; i++) {
+        const char = line[i];
+
+        if (inQuotes) {
+            if (char === '"') {
+                if (i + 1 < line.length && line[i + 1] === '"') {
+                    current += '"';
+                    i++;
+                } else {
+                    inQuotes = false;
+                }
+            } else {
+                current += char;
+            }
+        } else {
+            if (char === '"') {
+                inQuotes = true;
+            } else if (char === ',') {
+                result.push(current);
+                current = '';
+            } else {
+                current += char;
+            }
+        }
+    }
+    result.push(current);
+    return result;
+}
+
+function normalizeDateForComparison(dateStr) {
+    if (!dateStr) return '';
+    const cleaned = dateStr.replace(/"/g, '').trim();
+
+    const isoMatch = cleaned.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (isoMatch) {
+        return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
+    }
+
+    const usMatch = cleaned.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (usMatch) {
+        return `${usMatch[3]}-${usMatch[1].padStart(2, '0')}-${usMatch[2].padStart(2, '0')}`;
+    }
+
+    return cleaned;
+}
+
+async function processReturnExtractorData() {
+    if (returnExtractorUploadedFiles.length === 0) return;
+
+    const selectedDate = returnExtractorDateInput.value;
+    if (!selectedDate) {
+        alert('Please select a date first.');
+        return;
+    }
+
+    returnExtractorStatusSection.style.display = 'block';
+    returnExtractorResultsSection.style.display = 'none';
+    returnExtractorProgressFill.style.width = '0%';
+    returnExtractorStatusText.textContent = 'Starting processing...';
+
+    try {
+        const aggregatedCounts = {};
+        const perFileResults = [];
+        let totalRows = 0;
+
+        for (let fileIdx = 0; fileIdx < returnExtractorUploadedFiles.length; fileIdx++) {
+            const file = returnExtractorUploadedFiles[fileIdx];
+            const percent = ((fileIdx + 1) / returnExtractorUploadedFiles.length) * 100;
+            returnExtractorProgressFill.style.width = `${percent}%`;
+            returnExtractorStatusText.textContent = `Processing file ${fileIdx + 1} of ${returnExtractorUploadedFiles.length}: ${file.name}`;
+
+            const text = await file.text();
+            const { header, data } = parseReturnExtractorCSV(text);
+
+            const deliveredDateCol = header.find(h => h.toLowerCase().includes('delivered date'));
+            const courierPartnerCol = header.find(h => h.toLowerCase().includes('courier partner'));
+
+            if (!deliveredDateCol || !courierPartnerCol) {
+                perFileResults.push({ fileName: file.name, counts: {}, error: 'Missing required columns' });
+                continue;
+            }
+
+            const fileCounts = {};
+            for (const row of data) {
+                const rowDate = normalizeDateForComparison(row[deliveredDateCol]);
+                if (rowDate === selectedDate) {
+                    const courier = (row[courierPartnerCol] || '').replace(/"/g, '').trim();
+                    if (courier) {
+                        aggregatedCounts[courier] = (aggregatedCounts[courier] || 0) + 1;
+                        fileCounts[courier] = (fileCounts[courier] || 0) + 1;
+                        totalRows++;
+                    }
+                }
+            }
+
+            perFileResults.push({ fileName: file.name, counts: fileCounts });
+        }
+
+        returnExtractorStatusText.textContent = 'Processing complete!';
+        returnExtractorProgressFill.style.width = '100%';
+
+        displayReturnExtractorResults(aggregatedCounts, perFileResults, totalRows, selectedDate);
+
+        returnExtractorStatusSection.style.display = 'none';
+        returnExtractorResultsSection.style.display = 'block';
+    } catch (error) {
+        returnExtractorStatusText.textContent = `Error: ${error.message}`;
+        returnExtractorProgressFill.style.backgroundColor = '#ef4444';
+    }
+}
+
+function displayReturnExtractorResults(aggregatedCounts, perFileResults, totalRows, selectedDate) {
+    const sortedCouriers = Object.entries(aggregatedCounts).sort((a, b) => b[1] - a[1]);
+    const uniqueCouriers = sortedCouriers.length;
+
+    returnExtractorTotalReturns.textContent = totalRows;
+    returnExtractorUniqueCouriers.textContent = uniqueCouriers;
+
+    let textOutput = '';
+    for (const [courier, count] of sortedCouriers) {
+        textOutput += `${courier} - ${count}\n`;
+    }
+    returnExtractorTextOutput.textContent = textOutput.trim();
+
+    let perFileHTML = '';
+    for (const fileResult of perFileResults) {
+        const fileCouriers = Object.entries(fileResult.counts).sort((a, b) => b[1] - a[1]);
+        const fileTotal = fileCouriers.reduce((sum, [, count]) => sum + count, 0);
+
+        if (fileResult.error) {
+            perFileHTML += `
+                <div class="return-extractor-per-file-card">
+                    <div class="return-extractor-per-file-header">📄 ${fileResult.fileName}</div>
+                    <div class="return-extractor-per-file-items">
+                        <div class="return-extractor-no-data">${fileResult.error}</div>
+                    </div>
+                </div>`;
+            continue;
+        }
+
+        if (fileCouriers.length === 0) {
+            perFileHTML += `
+                <div class="return-extractor-per-file-card">
+                    <div class="return-extractor-per-file-header">📄 ${fileResult.fileName}</div>
+                    <div class="return-extractor-per-file-items">
+                        <div class="return-extractor-no-data">No returns found for ${selectedDate}</div>
+                    </div>
+                </div>`;
+            continue;
+        }
+
+        let itemsHTML = '';
+        for (const [courier, count] of fileCouriers) {
+            itemsHTML += `
+                <div class="return-extractor-per-file-item">
+                    <span class="return-extractor-per-file-courier">📦 ${courier}</span>
+                    <span class="return-extractor-per-file-count">${count}</span>
+                </div>`;
+        }
+
+        perFileHTML += `
+            <div class="return-extractor-per-file-card">
+                <div class="return-extractor-per-file-header">📄 ${fileResult.fileName}</div>
+                <div class="return-extractor-per-file-items">
+                    ${itemsHTML}
+                    <div class="return-extractor-per-file-total">
+                        <span>Total</span>
+                        <span class="return-extractor-per-file-total-count">${fileTotal}</span>
+                    </div>
+                </div>
+            </div>`;
+    }
+
+    returnExtractorPerFileBreakdown.innerHTML = perFileHTML;
+}
+
+function copyReturnExtractorResults() {
+    const text = returnExtractorTextOutput.textContent;
+    navigator.clipboard.writeText(text).then(() => {
+        returnExtractorCopyFeedback.style.display = 'inline';
+        setTimeout(() => {
+            returnExtractorCopyFeedback.style.display = 'none';
+        }, 2000);
+    }).catch(err => {
+        console.error('Failed to copy:', err);
+        alert('Failed to copy results. Please select and copy manually.');
+    });
+}

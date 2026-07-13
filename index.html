@@ -34,6 +34,9 @@
                 <button class="tab-btn" id="skuAutomationTabBtn" data-tab="sku-automation" onclick="switchTab('sku-automation')">
                     📦 SKU To New3 Automation
                 </button>
+                <button class="tab-btn" data-tab="return-extractor" onclick="switchTab('return-extractor')">
+                    📤 Return Extractor
+                </button>
             </nav>
         </header>
 
@@ -629,6 +632,84 @@
                 </section>
             </div>
             <!-- END SKU AUTOMATION TAB CONTENT -->
+
+            <!-- RETURN EXTRACTOR TAB CONTENT -->
+            <div id="return-extractor-tab-content" class="tab-content">
+                <section class="upload-section">
+                    <div class="upload-area" id="returnExtractorUploadArea">
+                        <div class="upload-icon">📤</div>
+                        <h2>Drop your CSV return files here</h2>
+                        <p>or click to browse (supports multiple CSV files)</p>
+                        <input type="file" id="returnExtractorFileInput" accept=".csv" multiple>
+                    </div>
+                    <div class="button-group">
+                        <button class="btn btn-secondary" id="returnExtractorClearBtn" style="display: none;">
+                            🗑️ Clear Files
+                        </button>
+                    </div>
+                </section>
+
+                <section class="return-extractor-files-info" id="returnExtractorFilesInfo" style="display: none;">
+                    <h3>📁 Uploaded Files</h3>
+                    <div class="return-extractor-files-list" id="returnExtractorFilesList"></div>
+                </section>
+
+                <section class="return-extractor-date-section">
+                    <div class="results-card">
+                        <h3>📅 Select Date</h3>
+                        <p>Choose the delivered date to extract return counts for</p>
+                        <div class="return-extractor-date-picker">
+                            <label for="returnExtractorDateInput">Delivered Date:</label>
+                            <input type="date" id="returnExtractorDateInput">
+                        </div>
+                        <div class="button-group">
+                            <button class="btn btn-primary" id="returnExtractorProcessBtn" disabled>
+                                📊 Extract Returns Data
+                            </button>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="status-section" id="returnExtractorStatusSection" style="display: none;">
+                    <div class="status-card">
+                        <h3>Processing Status</h3>
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="returnExtractorProgressFill"></div>
+                        </div>
+                        <p id="returnExtractorStatusText">Initializing...</p>
+                    </div>
+                </section>
+
+                <section class="return-extractor-results-section" id="returnExtractorResultsSection" style="display: none;">
+                    <div class="results-card">
+                        <h3>📊 Return Extractor Results</h3>
+                        <div class="return-extractor-summary">
+                            <div class="stat-item">
+                                <span class="stat-value" id="returnExtractorTotalReturns">0</span>
+                                <span class="stat-label">Total Returns</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-value" id="returnExtractorUniqueCouriers">0</span>
+                                <span class="stat-label">Courier Partners</span>
+                            </div>
+                        </div>
+
+                        <div class="return-extractor-output-section">
+                            <h4>📋 Returns by Courier</h4>
+                            <pre id="returnExtractorTextOutput" class="counter-text-output"></pre>
+                            <div class="button-group">
+                                <button class="btn btn-success" id="copyReturnExtractorBtn">
+                                    📋 Copy Results
+                                </button>
+                                <span class="copy-feedback" id="returnExtractorCopyFeedback" style="display: none;">✅ Copied!</span>
+                            </div>
+                        </div>
+
+                        <div class="return-extractor-per-file-breakdown" id="returnExtractorPerFileBreakdown"></div>
+                    </div>
+                </section>
+            </div>
+            <!-- END RETURN EXTRACTOR TAB CONTENT -->
 
             <!-- Password Modal -->
             <div class="modal" id="passwordModal" style="display: none;">
