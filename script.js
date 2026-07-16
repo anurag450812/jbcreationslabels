@@ -7857,9 +7857,6 @@ function displayReturnExtractorResults(aggregatedCounts, perFileResults, totalRo
     const sortedCouriers = Object.entries(aggregatedCounts).sort((a, b) => b[1] - a[1]);
     const uniqueCouriers = sortedCouriers.length;
 
-    returnExtractorTotalReturns.textContent = totalRows;
-    returnExtractorUniqueCouriers.textContent = pocketshipCount > 0 ? uniqueCouriers - 1 : uniqueCouriers;
-
     const mergedCounts = { ...aggregatedCounts };
     const pocketshipCount = mergedCounts['PocketShip'] || mergedCounts['pocketship'] || 0;
     if (pocketshipCount > 0) {
@@ -7873,6 +7870,9 @@ function displayReturnExtractorResults(aggregatedCounts, perFileResults, totalRo
         delete mergedCounts['pocketship'];
     }
     const mergedSorted = Object.entries(mergedCounts).sort((a, b) => b[1] - a[1]);
+
+    returnExtractorTotalReturns.textContent = totalRows;
+    returnExtractorUniqueCouriers.textContent = pocketshipCount > 0 ? uniqueCouriers - 1 : uniqueCouriers;
 
     let textOutput = '';
     for (const [courier, count] of mergedSorted) {
