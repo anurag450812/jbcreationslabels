@@ -7858,10 +7858,24 @@ function displayReturnExtractorResults(aggregatedCounts, perFileResults, totalRo
     const uniqueCouriers = sortedCouriers.length;
 
     returnExtractorTotalReturns.textContent = totalRows;
-    returnExtractorUniqueCouriers.textContent = uniqueCouriers;
+    returnExtractorUniqueCouriers.textContent = pocketshipCount > 0 ? uniqueCouriers - 1 : uniqueCouriers;
+
+    const mergedCounts = { ...aggregatedCounts };
+    const pocketshipCount = mergedCounts['PocketShip'] || mergedCounts['pocketship'] || 0;
+    if (pocketshipCount > 0) {
+        const valmoKey = Object.keys(mergedCounts).find(k => k.toLowerCase() === 'valmo');
+        if (valmoKey) {
+            mergedCounts[valmoKey] += pocketshipCount;
+        } else {
+            mergedCounts['Valmo'] = pocketshipCount;
+        }
+        delete mergedCounts['PocketShip'];
+        delete mergedCounts['pocketship'];
+    }
+    const mergedSorted = Object.entries(mergedCounts).sort((a, b) => b[1] - a[1]);
 
     let textOutput = '';
-    for (const [courier, count] of sortedCouriers) {
+    for (const [courier, count] of mergedSorted) {
         textOutput += `${courier} - ${count}\n`;
     }
     returnExtractorTextOutput.textContent = textOutput.trim();
