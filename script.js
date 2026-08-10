@@ -641,6 +641,7 @@ let returnExtractorUploadedFiles = [];
 
 // FBF Order to Sheets state
 let fbfOrdersUploadedFiles = [];
+let fbfOrdersDragDepth = 0;
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -1673,17 +1674,31 @@ function setupEventListeners() {
     if (fbfOrdersUploadArea) {
         fbfOrdersUploadArea.addEventListener('click', () => fbfOrdersFileInput.click());
 
+        fbfOrdersUploadArea.addEventListener('dragenter', (e) => {
+            e.preventDefault();
+            fbfOrdersDragDepth += 1;
+            fbfOrdersUploadArea.classList.add('dragover');
+        });
+
         fbfOrdersUploadArea.addEventListener('dragover', (e) => {
             e.preventDefault();
+            if (e.dataTransfer) {
+                e.dataTransfer.dropEffect = 'copy';
+            }
             fbfOrdersUploadArea.classList.add('dragover');
         });
 
         fbfOrdersUploadArea.addEventListener('dragleave', () => {
-            fbfOrdersUploadArea.classList.remove('dragover');
+            fbfOrdersDragDepth -= 1;
+            if (fbfOrdersDragDepth <= 0) {
+                fbfOrdersDragDepth = 0;
+                fbfOrdersUploadArea.classList.remove('dragover');
+            }
         });
 
         fbfOrdersUploadArea.addEventListener('drop', (e) => {
             e.preventDefault();
+            fbfOrdersDragDepth = 0;
             fbfOrdersUploadArea.classList.remove('dragover');
             const files = getDroppedFiles(e.dataTransfer, isCsvLikeFile);
             if (files.length > 0) {
