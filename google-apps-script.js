@@ -295,6 +295,10 @@ function doPost(e) {
       return handleSaveAppConfig(data);
     }
     
+    if (data.action === 'appendFbfOrders') {
+      return handleAppendFbfOrders(data);
+    }
+    
     return ContentService.createTextOutput(JSON.stringify({
       success: false,
       message: 'Unknown action: ' + data.action
@@ -436,7 +440,7 @@ function doGet(e) {
     status: 'ok',
     message: 'JB Creations Stock Update API is running',
     timestamp: new Date().toISOString(),
-    availableActions: ['deductStock', 'savePriorityLabels', 'getPriorityLabels', 'saveLabelCriteria', 'getLabelCriteria', 'saveAppConfig', 'getAppConfig']
+    availableActions: ['deductStock', 'savePriorityLabels', 'getPriorityLabels', 'saveLabelCriteria', 'getLabelCriteria', 'saveAppConfig', 'getAppConfig', 'appendFbfOrders']
   })).setMimeType(ContentService.MimeType.JSON);
 }
 
@@ -1328,4 +1332,75 @@ function testWriteOrdersFromStock() {
 function testArchiveOrdersData() {
   archiveOrdersData();
   Logger.log("Archive process completed");
+}
+
+/**
+ * Handles the "appendFbfOrders" action from the FBF Order to Sheets tab.
+ * Appends each uploaded SKU below the existing data in the
+ * "Orders From Stock yesterday" sheet, with yesterday's date in column B.
+ *
+ * @param {Object} data - Contains the skus array
+ */
+function handleAppendFbfOrders(data) {
+  try {
+    var skus = data.skus || [];
+    if (!Array.isArray(skus) || skus.length === 0) {
+      return ContentService.createTextOutput(JSON.stringify({
+        success: false,
+        message: 'No SKUs provided'
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+
+    // Get or create the "Orders From Stock yesterday" sheet
+    var yesterdaySheet = spreadsheet.getSheetByName("Orders From Stock yesterday");
+    if (!yesterdaySheet) {
+      yesterdaySheet = spreadsheet.insertSheet("Orders From Stock yesterday");
+      Logger.log("Created new sheet: Orders From Stock yesterday");
+    }
+
+    // Yesterday's date for the second column
+    var today = new Date();
+    var yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+    var yesterdayString = Utilities.formatDate(yesterday, Session.getScriptTimeZone(), "yyyy-MM-dd");
+
+    // Prepare rows to append below existing data
+    var rowsToAppend = [];
+    for (var i = 0; i < skus.length; i++) {
+      var sku = String(skus[i] || '').trim();
+      if (sku) {
+        rowsToAppend.push([sku, yesterdayString]);
+      }
+    }
+
+    if (rowsToAppend.length === 0) {
+      return ContentService.createTextOutput(JSON.stringify({
+        success: false,
+        message: 'No valid SKUs provided'
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // Append below the existing data
+    var lastRow = yesterdaySheet.getLastRow();
+    var startRow = lastRow + 1;
+    yesterdaySheet.getRange(startRow, 1, rowsToAppend.length, 2).setValues(rowsToAppend);
+    SpreadsheetApp.flush();
+
+    Logger.log("Appended " + rowsToAppend.length + " FBF order row(s) to Orders From Stock yesterday with date " + yesterdayString);
+
+    return ContentService.createTextOutput(JSON.stringify({
+      success: true,
+      message: 'FBF orders appended successfully',
+      rowsAdded: rowsToAppend.length,
+      date: yesterdayString
+    })).setMimeType(ContentService.MimeType.JSON);
+  } catch (error) {
+    Logger.log("Error in handleAppendFbfOrders: " + error.toString());
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false,
+      message: error.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
 }

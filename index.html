@@ -37,6 +37,9 @@
                 <button class="tab-btn" data-tab="return-extractor" onclick="switchTab('return-extractor')">
                     📤 Return Extractor
                 </button>
+                <button class="tab-btn" data-tab="fbf-orders" onclick="switchTab('fbf-orders')">
+                    📥 FBF Order to Sheets
+                </button>
             </nav>
         </header>
 
@@ -710,6 +713,69 @@
                 </section>
             </div>
             <!-- END RETURN EXTRACTOR TAB CONTENT -->
+
+            <!-- FBF ORDER TO SHEETS TAB CONTENT -->
+            <div id="fbf-orders-tab-content" class="tab-content">
+                <section class="fbf-orders-info-section">
+                    <div class="results-card">
+                        <h3>📥 FBF Order to Sheets</h3>
+                        <p>Upload a CSV file containing a column named <strong>SKU</strong>. Every SKU id found will be appended below the existing data in the <strong>Orders From Stock yesterday</strong> tab of your Google Sheet, with yesterday's date written in the second column.</p>
+                    </div>
+                </section>
+
+                <section class="upload-section">
+                    <div class="upload-area" id="fbfOrdersUploadArea">
+                        <div class="upload-icon">📥</div>
+                        <h2>Drop your CSV file here</h2>
+                        <p>or click to browse (CSV with a SKU column)</p>
+                        <input type="file" id="fbfOrdersFileInput" accept=".csv" multiple>
+                    </div>
+                    <div class="button-group">
+                        <button class="btn btn-secondary" id="fbfOrdersClearBtn" style="display: none;">
+                            🗑️ Clear Files
+                        </button>
+                        <button class="btn btn-primary" id="fbfOrdersProcessBtn" disabled>
+                            📊 Send FBF Orders to Sheets
+                        </button>
+                    </div>
+                </section>
+
+                <section class="fbf-orders-files-info" id="fbfOrdersFilesInfo" style="display: none;">
+                    <h3>📁 Uploaded Files</h3>
+                    <div class="fbf-orders-files-list" id="fbfOrdersFilesList"></div>
+                </section>
+
+                <section class="status-section" id="fbfOrdersStatusSection" style="display: none;">
+                    <div class="status-card">
+                        <h3>Processing Status</h3>
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="fbfOrdersProgressFill"></div>
+                        </div>
+                        <p id="fbfOrdersStatusText">Initializing...</p>
+                    </div>
+                </section>
+
+                <section class="fbf-orders-results-section" id="fbfOrdersResultsSection" style="display: none;">
+                    <div class="results-card">
+                        <h3>📊 FBF Order Results</h3>
+                        <div class="fbf-orders-summary">
+                            <div class="stat-item">
+                                <span class="stat-value" id="fbfOrdersTotalSkus">0</span>
+                                <span class="stat-label">SKUs Found</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-value" id="fbfOrdersRowsAdded">0</span>
+                                <span class="stat-label">Rows Added</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-value" id="fbfOrdersDestSheet">-</span>
+                                <span class="stat-label">Destination Tab</span>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+            </div>
+            <!-- END FBF ORDER TO SHEETS TAB CONTENT -->
 
             <!-- Password Modal -->
             <div class="modal" id="passwordModal" style="display: none;">

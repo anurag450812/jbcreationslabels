@@ -622,7 +622,25 @@ const copyReturnExtractorBtn = document.getElementById('copyReturnExtractorBtn')
 const returnExtractorCopyFeedback = document.getElementById('returnExtractorCopyFeedback');
 const returnExtractorPerFileBreakdown = document.getElementById('returnExtractorPerFileBreakdown');
 
+// FBF Order to Sheets DOM Elements
+const fbfOrdersUploadArea = document.getElementById('fbfOrdersUploadArea');
+const fbfOrdersFileInput = document.getElementById('fbfOrdersFileInput');
+const fbfOrdersClearBtn = document.getElementById('fbfOrdersClearBtn');
+const fbfOrdersProcessBtn = document.getElementById('fbfOrdersProcessBtn');
+const fbfOrdersFilesInfo = document.getElementById('fbfOrdersFilesInfo');
+const fbfOrdersFilesList = document.getElementById('fbfOrdersFilesList');
+const fbfOrdersStatusSection = document.getElementById('fbfOrdersStatusSection');
+const fbfOrdersProgressFill = document.getElementById('fbfOrdersProgressFill');
+const fbfOrdersStatusText = document.getElementById('fbfOrdersStatusText');
+const fbfOrdersResultsSection = document.getElementById('fbfOrdersResultsSection');
+const fbfOrdersTotalSkus = document.getElementById('fbfOrdersTotalSkus');
+const fbfOrdersRowsAdded = document.getElementById('fbfOrdersRowsAdded');
+const fbfOrdersDestSheet = document.getElementById('fbfOrdersDestSheet');
+
 let returnExtractorUploadedFiles = [];
+
+// FBF Order to Sheets state
+let fbfOrdersUploadedFiles = [];
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -789,7 +807,7 @@ function initializeApp() {
     
     // Restore active tab from localStorage
     const savedTab = isDesktopApp() ? 'sku-automation' : localStorage.getItem('activeTab');
-    if (savedTab && (savedTab === 'sorting' || savedTab === 'counter' || savedTab === 'cropping' || savedTab === 'finder' || savedTab === 'packet-parchi' || savedTab === 'sku-automation' || savedTab === 'return-extractor')) {
+    if (savedTab && (savedTab === 'sorting' || savedTab === 'counter' || savedTab === 'cropping' || savedTab === 'finder' || savedTab === 'packet-parchi' || savedTab === 'sku-automation' || savedTab === 'return-extractor' || savedTab === 'fbf-orders')) {
         switchTab(savedTab);
     }
     
@@ -1642,6 +1660,44 @@ function setupEventListeners() {
 
     if (copyReturnExtractorBtn) {
         copyReturnExtractorBtn.addEventListener('click', copyReturnExtractorResults);
+    }
+
+    // ===============================
+    // FBF ORDER TO SHEETS EVENT LISTENERS
+    // ===============================
+
+    if (fbfOrdersFileInput) {
+        fbfOrdersFileInput.addEventListener('change', handleFbfOrdersFileSelect);
+    }
+
+    if (fbfOrdersUploadArea) {
+        fbfOrdersUploadArea.addEventListener('click', () => fbfOrdersFileInput.click());
+
+        fbfOrdersUploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            fbfOrdersUploadArea.classList.add('dragover');
+        });
+
+        fbfOrdersUploadArea.addEventListener('dragleave', () => {
+            fbfOrdersUploadArea.classList.remove('dragover');
+        });
+
+        fbfOrdersUploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            fbfOrdersUploadArea.classList.remove('dragover');
+            const files = getDroppedFiles(e.dataTransfer, isCsvLikeFile);
+            if (files.length > 0) {
+                handleFbfOrdersFiles(files);
+            }
+        });
+    }
+
+    if (fbfOrdersClearBtn) {
+        fbfOrdersClearBtn.addEventListener('click', clearFbfOrdersFiles);
+    }
+
+    if (fbfOrdersProcessBtn) {
+        fbfOrdersProcessBtn.addEventListener('click', sendFbfOrdersToSheets);
     }
 
     // Label finder
@@ -7943,4 +7999,201 @@ function copyReturnExtractorResults() {
         console.error('Failed to copy:', err);
         alert('Failed to copy results. Please select and copy manually.');
     });
+}
+
+// ===============================
+// FBF ORDER TO SHEETS FUNCTIONS
+// ===============================
+
+function handleFbfOrdersFileSelect(e) {
+    const files = Array.from(e.target.files);
+    if (files.length > 0) {
+        handleFbfOrdersFiles(files);
+    }
+}
+
+function handleFbfOrdersFiles(files) {
+    const existingFileNames = new Set(fbfOrdersUploadedFiles.map(f => f.name));
+    const newFiles = files.filter(f => !existingFileNames.has(f.name));
+    fbfOrdersUploadedFiles = [...fbfOrdersUploadedFiles, ...newFiles];
+
+    if (fbfOrdersUploadedFiles.length > 0) {
+        fbfOrdersProcessBtn.disabled = false;
+        fbfOrdersClearBtn.style.display = 'inline-flex';
+        updateUploadAreaCopy(fbfOrdersUploadArea, `${fbfOrdersUploadedFiles.length} file(s) ready`, 'Drop more files or click to add more');
+        displayFbfOrdersFilesInfo();
+    }
+}
+
+function displayFbfOrdersFilesInfo() {
+    fbfOrdersFilesInfo.style.display = 'block';
+    fbfOrdersFilesList.innerHTML = fbfOrdersUploadedFiles.map(file =>
+        `<div class="fbf-orders-file-item">📄 ${file.name}</div>`
+    ).join('');
+}
+
+function clearFbfOrdersFiles() {
+    fbfOrdersUploadedFiles = [];
+    fbfOrdersFileInput.value = '';
+    fbfOrdersFilesInfo.style.display = 'none';
+    fbfOrdersResultsSection.style.display = 'none';
+    fbfOrdersStatusSection.style.display = 'none';
+    fbfOrdersProcessBtn.disabled = true;
+    fbfOrdersClearBtn.style.display = 'none';
+    updateUploadAreaCopy(fbfOrdersUploadArea, 'Drop your CSV file here', 'or click to browse (CSV with a SKU column)');
+}
+
+function parseFbfOrdersCSV(text) {
+    const lines = text.split(/\r?\n/);
+    let headerRowIndex = -1;
+
+    // Look for a header row that contains a column named SKU
+    for (let i = 0; i < Math.min(lines.length, 20); i++) {
+        const header = parseCSVLine(lines[i]).map(h => String(h || '').trim());
+        if (header.some(h => h.toLowerCase() === 'sku')) {
+            headerRowIndex = i;
+            break;
+        }
+    }
+
+    // Fallback: treat the first comma-containing row as the header
+    if (headerRowIndex === -1) {
+        for (let i = 0; i < Math.min(lines.length, 20); i++) {
+            const trimmed = lines[i].trim();
+            if (trimmed && trimmed.includes(',')) {
+                headerRowIndex = i;
+                break;
+            }
+        }
+    }
+
+    if (headerRowIndex === -1) return { header: [], data: [] };
+
+    const header = parseCSVLine(lines[headerRowIndex]).map(h => String(h || '').trim());
+    const data = [];
+
+    for (let i = headerRowIndex + 1; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        const values = parseCSVLine(line);
+        if (values.length >= header.length) {
+            data.push(values.map(value => String(value || '').trim()));
+        }
+    }
+
+    return { header, data };
+}
+
+function extractSkusFromFbfCsv(text) {
+    const { header, data } = parseFbfOrdersCSV(text);
+    const skuIndex = header.findIndex(col => col.toLowerCase() === 'sku');
+    if (skuIndex === -1) return { skus: [], skuColumn: null };
+
+    const skus = [];
+    for (const row of data) {
+        const value = String(row[skuIndex] || '').trim();
+        if (value) {
+            skus.push(value);
+        }
+    }
+
+    return { skus, skuColumn: header[skuIndex] };
+}
+
+function setFbfOrdersProgress(percent, message) {
+    if (fbfOrdersStatusSection) {
+        fbfOrdersStatusSection.style.display = 'block';
+    }
+    if (fbfOrdersProgressFill) {
+        fbfOrdersProgressFill.style.width = `${percent}%`;
+        fbfOrdersProgressFill.textContent = percent > 0 ? `${Math.round(percent)}%` : '';
+    }
+    if (fbfOrdersStatusText) {
+        fbfOrdersStatusText.textContent = message;
+    }
+}
+
+async function sendFbfOrdersToSheets() {
+    if (fbfOrdersUploadedFiles.length === 0) return;
+
+    if (!GOOGLE_SHEETS_CONFIG.webAppUrl) {
+        alert('⚠️ Google Sheets is not configured. Please configure it first.');
+        return;
+    }
+
+    if (fbfOrdersResultsSection) {
+        fbfOrdersResultsSection.style.display = 'none';
+    }
+
+    setFbfOrdersProgress(0, 'Reading uploaded CSV file(s)...');
+
+    try {
+        const allSkus = [];
+
+        for (let fileIdx = 0; fileIdx < fbfOrdersUploadedFiles.length; fileIdx++) {
+            const file = fbfOrdersUploadedFiles[fileIdx];
+            setFbfOrdersProgress(
+                Math.round((fileIdx / fbfOrdersUploadedFiles.length) * 40),
+                `Parsing ${file.name}...`
+            );
+
+            const text = await file.text();
+            const { skus } = extractSkusFromFbfCsv(text);
+            allSkus.push(...skus);
+        }
+
+        if (allSkus.length === 0) {
+            throw new Error('No SKUs found. Make sure the CSV contains a column named "SKU" with values.');
+        }
+
+        setFbfOrdersProgress(50, `Found ${allSkus.length} SKU(s). Appending to Google Sheets...`);
+
+        const response = await fetch(GOOGLE_SHEETS_CONFIG.webAppUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'text/plain',
+            },
+            body: JSON.stringify({
+                action: 'appendFbfOrders',
+                skus: allSkus
+            }),
+            redirect: 'follow'
+        });
+
+        let result;
+        try {
+            const text = await response.text();
+            result = JSON.parse(text);
+        } catch (parseError) {
+            if (response.ok) {
+                result = { success: true, rowsAdded: allSkus.length };
+            } else {
+                throw new Error('Failed to append orders: ' + response.status);
+            }
+        }
+
+        if (!result.success) {
+            throw new Error(result.message || 'Unknown error');
+        }
+
+        setFbfOrdersProgress(100, `Done! ${result.rowsAdded} row(s) appended.`);
+
+        if (fbfOrdersTotalSkus) fbfOrdersTotalSkus.textContent = allSkus.length;
+        if (fbfOrdersRowsAdded) fbfOrdersRowsAdded.textContent = result.rowsAdded;
+        if (fbfOrdersDestSheet) fbfOrdersDestSheet.textContent = 'Orders From Stock yesterday';
+        if (fbfOrdersResultsSection) fbfOrdersResultsSection.style.display = 'block';
+
+        setTimeout(() => {
+            if (fbfOrdersStatusSection) {
+                fbfOrdersStatusSection.style.display = 'none';
+            }
+        }, 2500);
+    } catch (error) {
+        console.error('Error sending FBF orders to Google Sheets:', error);
+        setFbfOrdersProgress(0, `Error: ${error.message}`);
+        if (fbfOrdersProgressFill) {
+            fbfOrdersProgressFill.style.backgroundColor = '#ef4444';
+        }
+        alert(`Error: ${error.message}`);
+    }
 }
