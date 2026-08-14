@@ -719,7 +719,7 @@
                 <section class="fbf-orders-info-section">
                     <div class="results-card">
                         <h3>📥 FBF Order to Sheets</h3>
-                        <p>Upload a CSV file containing a column named <strong>SKU</strong>. Every SKU id found will be appended below the existing data in the <strong>Orders From Stock yesterday</strong> tab of your Google Sheet, with yesterday's date written in the second column.</p>
+                        <p>Upload a CSV file containing a column named <strong>SKU</strong>. Every SKU id found will be appended below the existing data in the <strong>Orders From Stock yesterday</strong> tab of your Google Sheet, with yesterday's date written in the second column. After that, the <strong>consolidated data</strong> tab (A2:A) is copied and appended below the existing data in the <strong>last 30 days data</strong> tab.</p>
                     </div>
                 </section>
 
@@ -766,6 +766,10 @@
                             <div class="stat-item">
                                 <span class="stat-value" id="fbfOrdersRowsAdded">0</span>
                                 <span class="stat-label">Rows Added</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-value" id="fbfOrdersRowsCopied">0</span>
+                                <span class="stat-label">Rows Copied to Last 30 Days</span>
                             </div>
                             <div class="stat-item">
                                 <span class="stat-value" id="fbfOrdersDestSheet">-</span>

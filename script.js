@@ -635,6 +635,7 @@ const fbfOrdersStatusText = document.getElementById('fbfOrdersStatusText');
 const fbfOrdersResultsSection = document.getElementById('fbfOrdersResultsSection');
 const fbfOrdersTotalSkus = document.getElementById('fbfOrdersTotalSkus');
 const fbfOrdersRowsAdded = document.getElementById('fbfOrdersRowsAdded');
+const fbfOrdersRowsCopied = document.getElementById('fbfOrdersRowsCopied');
 const fbfOrdersDestSheet = document.getElementById('fbfOrdersDestSheet');
 
 let returnExtractorUploadedFiles = [];
@@ -8191,11 +8192,41 @@ async function sendFbfOrdersToSheets() {
             throw new Error(result.message || 'Unknown error');
         }
 
-        setFbfOrdersProgress(100, `Done! ${result.rowsAdded} row(s) appended.`);
+        setFbfOrdersProgress(70, `Appended ${result.rowsAdded} row(s). Copying consolidated data to Last 30 Days...`);
+
+        const syncResponse = await fetch(GOOGLE_SHEETS_CONFIG.webAppUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'text/plain',
+            },
+            body: JSON.stringify({
+                action: 'syncConsolidatedToLast30Days'
+            }),
+            redirect: 'follow'
+        });
+
+        let syncResult;
+        try {
+            const text = await syncResponse.text();
+            syncResult = JSON.parse(text);
+        } catch (parseError) {
+            if (syncResponse.ok) {
+                syncResult = { success: true, rowsCopied: 0 };
+            } else {
+                throw new Error('Failed to sync consolidated data: ' + syncResponse.status);
+            }
+        }
+
+        if (!syncResult.success) {
+            throw new Error(syncResult.message || 'Unknown error');
+        }
+
+        setFbfOrdersProgress(100, `Done! ${result.rowsAdded} row(s) appended and ${syncResult.rowsCopied} row(s) copied to Last 30 Days.`);
 
         if (fbfOrdersTotalSkus) fbfOrdersTotalSkus.textContent = allSkus.length;
         if (fbfOrdersRowsAdded) fbfOrdersRowsAdded.textContent = result.rowsAdded;
         if (fbfOrdersDestSheet) fbfOrdersDestSheet.textContent = 'Orders From Stock yesterday';
+        if (fbfOrdersRowsCopied) fbfOrdersRowsCopied.textContent = syncResult.rowsCopied;
         if (fbfOrdersResultsSection) fbfOrdersResultsSection.style.display = 'block';
 
         setTimeout(() => {

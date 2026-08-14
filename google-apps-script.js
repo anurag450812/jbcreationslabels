@@ -299,6 +299,10 @@ function doPost(e) {
       return handleAppendFbfOrders(data);
     }
     
+    if (data.action === 'syncConsolidatedToLast30Days') {
+      return handleSyncConsolidatedToLast30Days();
+    }
+    
     return ContentService.createTextOutput(JSON.stringify({
       success: false,
       message: 'Unknown action: ' + data.action
@@ -1403,4 +1407,87 @@ function handleAppendFbfOrders(data) {
       message: error.toString()
     })).setMimeType(ContentService.MimeType.JSON);
   }
+}
+
+/**
+ * Copies all data from the "consolidated data" tab (A2:A) and appends it
+ * below the existing data in the "last 30 days data" tab.
+ * Called by the website after FBF orders are appended.
+ */
+function handleSyncConsolidatedToLast30Days() {
+  try {
+    var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+
+    var consolidatedSheet = getSheetByNameCaseInsensitive(spreadsheet, "consolidated data");
+    if (!consolidatedSheet) {
+      return ContentService.createTextOutput(JSON.stringify({
+        success: false,
+        message: 'Sheet "consolidated data" not found'
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // Force recalculation so any formulas in the consolidated data are fresh
+    SpreadsheetApp.flush();
+
+    var lastRow = consolidatedSheet.getLastRow();
+    if (lastRow < 2) {
+      return ContentService.createTextOutput(JSON.stringify({
+        success: false,
+        message: 'No data found in "consolidated data" A2:A'
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    var values = consolidatedSheet.getRange(2, 1, lastRow - 1, 1).getValues();
+    var rowsToCopy = values.filter(function(row) {
+      return String(row[0] || '').trim() !== '';
+    });
+
+    if (rowsToCopy.length === 0) {
+      return ContentService.createTextOutput(JSON.stringify({
+        success: false,
+        message: 'No data found in "consolidated data" A2:A'
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    var last30Sheet = getSheetByNameCaseInsensitive(spreadsheet, "last 30 days data");
+    if (!last30Sheet) {
+      last30Sheet = spreadsheet.insertSheet("last 30 days data");
+      Logger.log("Created new sheet: last 30 days data");
+    }
+
+    var appendStartRow = last30Sheet.getLastRow() + 1;
+    last30Sheet.getRange(appendStartRow, 1, rowsToCopy.length, 1).setValues(rowsToCopy);
+    SpreadsheetApp.flush();
+
+    Logger.log("Appended " + rowsToCopy.length + " row(s) from consolidated data to last 30 days data");
+
+    return ContentService.createTextOutput(JSON.stringify({
+      success: true,
+      message: 'Consolidated data copied to Last 30 Days data',
+      rowsCopied: rowsToCopy.length
+    })).setMimeType(ContentService.MimeType.JSON);
+  } catch (error) {
+    Logger.log("Error in handleSyncConsolidatedToLast30Days: " + error.toString());
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false,
+      message: error.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+/**
+ * Finds a sheet by name ignoring case, or returns null if not found.
+ */
+function getSheetByNameCaseInsensitive(spreadsheet, name) {
+  var exact = spreadsheet.getSheetByName(name);
+  if (exact) return exact;
+
+  var sheets = spreadsheet.getSheets();
+  var lowerName = String(name).toLowerCase();
+  for (var i = 0; i < sheets.length; i++) {
+    if (String(sheets[i].getName()).toLowerCase() === lowerName) {
+      return sheets[i];
+    }
+  }
+  return null;
 }
