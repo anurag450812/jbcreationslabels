@@ -303,6 +303,14 @@ function doPost(e) {
       return handleSyncConsolidatedToLast30Days();
     }
     
+    if (data.action === 'saveSkuList') {
+      return handleSaveSkuList(data);
+    }
+    
+    if (data.action === 'appendDailyParchiSkuPrints') {
+      return handleAppendDailyParchiSkuPrints(data);
+    }
+    
     return ContentService.createTextOutput(JSON.stringify({
       success: false,
       message: 'Unknown action: ' + data.action
@@ -440,11 +448,16 @@ function doGet(e) {
     return handleGetAppConfig();
   }
   
+  // Handle getSkuList action
+  if (action === 'getSkuList') {
+    return handleGetSkuList();
+  }
+  
   return ContentService.createTextOutput(JSON.stringify({
     status: 'ok',
     message: 'JB Creations Stock Update API is running',
     timestamp: new Date().toISOString(),
-    availableActions: ['deductStock', 'savePriorityLabels', 'getPriorityLabels', 'saveLabelCriteria', 'getLabelCriteria', 'saveAppConfig', 'getAppConfig', 'appendFbfOrders']
+    availableActions: ['deductStock', 'savePriorityLabels', 'getPriorityLabels', 'saveLabelCriteria', 'getLabelCriteria', 'saveAppConfig', 'getAppConfig', 'appendFbfOrders', 'saveSkuList', 'getSkuList', 'appendDailyParchiSkuPrints']
   })).setMimeType(ContentService.MimeType.JSON);
 }
 
@@ -1386,9 +1399,9 @@ function handleAppendFbfOrders(data) {
       })).setMimeType(ContentService.MimeType.JSON);
     }
 
-    // Append below the existing data
-    var lastRow = yesterdaySheet.getLastRow();
-    var startRow = lastRow + 1;
+    // Append below the existing data — use getLastDataRow on column A so we
+    // don't overshoot when column B (dates) has more rows than column A (SKUs).
+    var startRow = getLastDataRow(yesterdaySheet, 1) + 1;
     yesterdaySheet.getRange(startRow, 1, rowsToAppend.length, 2).setValues(rowsToAppend);
     SpreadsheetApp.flush();
 
@@ -1426,21 +1439,27 @@ function handleSyncConsolidatedToLast30Days() {
       })).setMimeType(ContentService.MimeType.JSON);
     }
 
-    // Force recalculation so any formulas in the consolidated data are fresh
+    // Force all pending writes to complete so formulas referencing recently
+    // appended data (e.g. in "Orders From Stock yesterday") are up-to-date.
     SpreadsheetApp.flush();
 
-    var lastRow = consolidatedSheet.getLastRow();
-    if (lastRow < 2) {
-      return ContentService.createTextOutput(JSON.stringify({
-        success: false,
-        message: 'No data found in "consolidated data" A2:A'
-      })).setMimeType(ContentService.MimeType.JSON);
-    }
+    // Second flush right before reading — formula recalculation in Sheets is
+    // asynchronous, so the first flush alone is not always sufficient.
+    SpreadsheetApp.flush();
 
-    var values = consolidatedSheet.getRange(2, 1, lastRow - 1, 1).getValues();
-    var rowsToCopy = values.filter(function(row) {
-      return String(row[0] || '').trim() !== '';
-    });
+    var rowsToCopy = readConsolidatedColumnA(consolidatedSheet);
+
+    // If no rows found on the first read, wait briefly for late formula
+    // recalculation and retry once.  This handles the common race condition
+    // where flush() completed but the spreadsheet engine had not yet finished
+    // evaluating formulas that depend on freshly-written data.
+    if (rowsToCopy.length === 0) {
+      Logger.log("First read returned 0 rows — retrying after delay for formula recalculation");
+      Utilities.sleep(1500);
+      SpreadsheetApp.flush();
+      rowsToCopy = readConsolidatedColumnA(consolidatedSheet);
+      Logger.log("Retry read returned " + rowsToCopy.length + " row(s)");
+    }
 
     if (rowsToCopy.length === 0) {
       return ContentService.createTextOutput(JSON.stringify({
@@ -1455,16 +1474,20 @@ function handleSyncConsolidatedToLast30Days() {
       Logger.log("Created new sheet: last 30 days data");
     }
 
-    var appendStartRow = last30Sheet.getLastRow() + 1;
+    var appendStartRow = getLastDataRow(last30Sheet, 1) + 1;
     last30Sheet.getRange(appendStartRow, 1, rowsToCopy.length, 1).setValues(rowsToCopy);
     SpreadsheetApp.flush();
 
-    Logger.log("Appended " + rowsToCopy.length + " row(s) from consolidated data to last 30 days data");
+    Logger.log("Appended " + rowsToCopy.length + " row(s) from consolidated data to last 30 days data (starting at row " + appendStartRow + ")");
+
+    var availableClearResult = clearAvailableColumnInStockAnalysis();
 
     return ContentService.createTextOutput(JSON.stringify({
       success: true,
-      message: 'Consolidated data copied to Last 30 Days data',
-      rowsCopied: rowsToCopy.length
+      message: 'Consolidated data copied to Last 30 Days data and Available column cleared',
+      rowsCopied: rowsToCopy.length,
+      availableCleared: availableClearResult.cleared,
+      availableClearedRows: availableClearResult.clearedRows
     })).setMimeType(ContentService.MimeType.JSON);
   } catch (error) {
     Logger.log("Error in handleSyncConsolidatedToLast30Days: " + error.toString());
@@ -1473,6 +1496,28 @@ function handleSyncConsolidatedToLast30Days() {
       message: error.toString()
     })).setMimeType(ContentService.MimeType.JSON);
   }
+}
+
+/**
+ * Reads all non-empty values from column A (row 2 downward) of the given sheet.
+ * Returns an array of [value] pairs ready for setValues().
+ */
+function readConsolidatedColumnA(sheet) {
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return [];
+
+  var values = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+  var nonEmpty = [];
+  for (var i = 0; i < values.length; i++) {
+    var cell = values[i][0];
+    if (cell !== null && cell !== undefined) {
+      var str = String(cell).trim();
+      if (str !== '') {
+        nonEmpty.push([cell]);
+      }
+    }
+  }
+  return nonEmpty;
 }
 
 /**
@@ -1490,4 +1535,289 @@ function getSheetByNameCaseInsensitive(spreadsheet, name) {
     }
   }
   return null;
+}
+
+/**
+ * Returns the last row of a column that actually contains a value.
+ * Unlike getLastRow(), this ignores cells containing only whitespace
+ * or empty formula results (e.g. ""), so appends land right below
+ * the real data instead of leaving blank rows in between.
+ */
+function getLastDataRow(sheet, column) {
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 1) return 0;
+
+  var CHUNK = 5000;
+  var end = lastRow;
+  while (end > 0) {
+    var start = Math.max(1, end - CHUNK + 1);
+    var values = sheet.getRange(start, column, end - start + 1, 1).getValues();
+    for (var i = values.length - 1; i >= 0; i--) {
+      var value = values[i][0];
+      if (value !== null && value !== undefined) {
+        if (typeof value === 'string') {
+          if (value.trim() !== '') return start + i;
+        } else {
+          return start + i;
+        }
+      }
+    }
+    end = start - 1;
+  }
+  return 0;
+}
+
+/**
+ * Finds the column whose header contains "Available" in the "STOCK ANALYSIS"
+ * tab and clears all of its data below the header.
+ */
+function clearAvailableColumnInStockAnalysis() {
+  try {
+    var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    var stockAnalysisSheet = spreadsheet.getSheetByName("STOCK ANALYSIS");
+    if (!stockAnalysisSheet) {
+      Logger.log("Warning: Sheet 'STOCK ANALYSIS' not found, skipped clearing Available column");
+      return { cleared: false, clearedRows: 0 };
+    }
+
+    var lastCol = stockAnalysisSheet.getLastColumn();
+    var headerRowIndex = -1;
+    var headerColumnIndex = -1;
+
+    for (var r = 1; r <= 5; r++) {
+      if (lastCol < 1) break;
+      var headers = stockAnalysisSheet.getRange(r, 1, 1, lastCol).getValues()[0];
+      for (var c = 0; c < headers.length; c++) {
+        var headerText = String(headers[c] || '').trim().toLowerCase();
+        if (headerText.indexOf('available') !== -1) {
+          headerRowIndex = r;
+          headerColumnIndex = c + 1;
+          break;
+        }
+      }
+      if (headerColumnIndex !== -1) break;
+    }
+
+    if (headerColumnIndex === -1) {
+      Logger.log("Warning: No header containing 'Available' found in STOCK ANALYSIS, skipped clearing");
+      return { cleared: false, clearedRows: 0 };
+    }
+
+    var lastRow = stockAnalysisSheet.getLastRow();
+    if (lastRow <= headerRowIndex) {
+      return { cleared: true, clearedRows: 0 };
+    }
+
+    stockAnalysisSheet.getRange(headerRowIndex + 1, headerColumnIndex, lastRow - headerRowIndex, 1).clearContent();
+    SpreadsheetApp.flush();
+
+    Logger.log("Cleared Available column (" + headerColumnIndex + ") below row " + headerRowIndex + " in STOCK ANALYSIS");
+    return { cleared: true, clearedRows: lastRow - headerRowIndex };
+  } catch (error) {
+    Logger.log("Error clearing Available column in STOCK ANALYSIS: " + error.toString());
+    return { cleared: false, clearedRows: 0, error: error.toString() };
+  }
+}
+
+// ============================================
+// SKU LIST MANAGEMENT (Daily Parchi)
+// ============================================
+
+var SKU_LIST_SHEET_NAME = 'SKU_LIST';
+
+/**
+ * Get or create the SKU list sheet
+ */
+function getSkuListSheet() {
+  var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = spreadsheet.getSheetByName(SKU_LIST_SHEET_NAME);
+  
+  if (!sheet) {
+    sheet = spreadsheet.insertSheet(SKU_LIST_SHEET_NAME);
+    sheet.getRange('A1').setValue('SKU');
+    sheet.getRange('A1').setFontWeight('bold');
+    sheet.getRange('A1').setBackground('#4a90d9');
+    sheet.getRange('A1').setFontColor('white');
+    sheet.setColumnWidth(1, 200);
+    Logger.log('Created new SKU_LIST sheet');
+  }
+  
+  return sheet;
+}
+
+/**
+ * Handle saving SKU list to Google Sheets
+ */
+function handleSaveSkuList(data) {
+  try {
+    var skus = data.skus;
+    
+    if (!skus || !Array.isArray(skus) || skus.length === 0) {
+      return ContentService.createTextOutput(JSON.stringify({
+        success: false,
+        message: 'No SKUs provided'
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    var sheet = getSkuListSheet();
+    
+    // Clear existing SKUs (except header)
+    var lastRow = sheet.getLastRow();
+    if (lastRow > 1) {
+      sheet.getRange(2, 1, lastRow - 1, 1).clear();
+    }
+    
+    // Write new SKUs starting from row 2
+    var skuData = skus.map(function(sku) {
+      return [sku];
+    });
+    
+    sheet.getRange(2, 1, skuData.length, 1).setValues(skuData);
+    
+    // Add timestamp in column B, row 1
+    sheet.getRange('B1').setValue('Last Updated');
+    sheet.getRange('B1').setFontWeight('bold');
+    sheet.getRange('B2').setValue(new Date().toISOString());
+    sheet.setColumnWidth(2, 180);
+    
+    Logger.log('Saved ' + skus.length + ' SKUs to sheet');
+    
+    return ContentService.createTextOutput(JSON.stringify({
+      success: true,
+      message: 'SKU list saved successfully',
+      count: skus.length,
+      timestamp: new Date().toISOString()
+    })).setMimeType(ContentService.MimeType.JSON);
+    
+  } catch (error) {
+    Logger.log('Error saving SKU list: ' + error.toString());
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false,
+      message: 'Error saving SKU list: ' + error.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+/**
+ * Handle getting SKU list from Google Sheets
+ */
+function handleGetSkuList() {
+  try {
+    var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = spreadsheet.getSheetByName(SKU_LIST_SHEET_NAME);
+    
+    if (!sheet) {
+      Logger.log('SKU list sheet not found, returning empty array');
+      return ContentService.createTextOutput(JSON.stringify({
+        success: true,
+        skus: [],
+        message: 'SKU list sheet not found'
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    var lastRow = sheet.getLastRow();
+    
+    if (lastRow <= 1) {
+      return ContentService.createTextOutput(JSON.stringify({
+        success: true,
+        skus: [],
+        message: 'No SKUs found'
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    var range = sheet.getRange(2, 1, lastRow - 1, 1);
+    var values = range.getValues();
+    
+    var skus = values
+      .map(function(row) { return String(row[0]).trim(); })
+      .filter(function(sku) { return sku.length > 0; });
+    
+    Logger.log('Retrieved ' + skus.length + ' SKUs from sheet');
+    
+    return ContentService.createTextOutput(JSON.stringify({
+      success: true,
+      skus: skus,
+      count: skus.length,
+      message: 'SKU list retrieved successfully'
+    })).setMimeType(ContentService.MimeType.JSON);
+    
+  } catch (error) {
+    Logger.log('Error getting SKU list: ' + error.toString());
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false,
+      skus: [],
+      message: 'Error getting SKU list: ' + error.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+/**
+ * Handle appending SKU+tracking pairs to "Daily Parchi Sku Prints" tab
+ * Column A = SKU, Column B = Tracking ID
+ */
+function handleAppendDailyParchiSkuPrints(data) {
+  try {
+    var pairs = data.pairs;
+    
+    if (!pairs || !Array.isArray(pairs) || pairs.length === 0) {
+      return ContentService.createTextOutput(JSON.stringify({
+        success: false,
+        message: 'No SKU+Tracking pairs provided'
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    var sheetName = 'Daily Parchi Sku Prints';
+    var sheet = spreadsheet.getSheetByName(sheetName);
+    
+    if (!sheet) {
+      sheet = spreadsheet.insertSheet(sheetName);
+      // Add headers
+      sheet.getRange('A1').setValue('SKU');
+      sheet.getRange('B1').setValue('Tracking ID');
+      sheet.getRange('A1:B1').setFontWeight('bold');
+      sheet.getRange('A1:B1').setBackground('#4a90d9');
+      sheet.getRange('A1:B1').setFontColor('white');
+      sheet.setColumnWidth(1, 200);
+      sheet.setColumnWidth(2, 250);
+      Logger.log('Created new sheet: ' + sheetName);
+    }
+    
+    // Prepare rows to append
+    var rowsToAppend = [];
+    for (var i = 0; i < pairs.length; i++) {
+      var sku = String(pairs[i].sku || '').trim();
+      var tracking = String(pairs[i].tracking || '').trim();
+      if (sku && tracking) {
+        rowsToAppend.push([sku, tracking]);
+      }
+    }
+    
+    if (rowsToAppend.length === 0) {
+      return ContentService.createTextOutput(JSON.stringify({
+        success: false,
+        message: 'No valid SKU+Tracking pairs provided'
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    // Append below existing data
+    var startRow = getLastDataRow(sheet, 1) + 1;
+    sheet.getRange(startRow, 1, rowsToAppend.length, 2).setValues(rowsToAppend);
+    SpreadsheetApp.flush();
+    
+    Logger.log('Appended ' + rowsToAppend.length + ' row(s) to ' + sheetName);
+    
+    return ContentService.createTextOutput(JSON.stringify({
+      success: true,
+      message: 'SKU+Tracking pairs appended successfully',
+      rowsAdded: rowsToAppend.length
+    })).setMimeType(ContentService.MimeType.JSON);
+    
+  } catch (error) {
+    Logger.log('Error in handleAppendDailyParchiSkuPrints: ' + error.toString());
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false,
+      message: error.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
 }

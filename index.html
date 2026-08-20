@@ -120,7 +120,11 @@
                         <button class="btn btn-secondary" id="updateStockBtn">
                             📊 Update Stock to Google Sheets
                         </button>
+                        <button class="btn btn-secondary" id="extractSkuToParchiBtn" style="display: none;">
+                            📤 Extract SKUs to Daily Parchi
+                        </button>
                     </div>
+                    <div id="extractSkuStatus" class="stock-update-section" style="display: none;"></div>
 
                     <div class="finder-upload-section" id="finderUploadSection" style="display: none;">
                         <h4>🔎 Label Finder Upload</h4>
@@ -138,6 +142,16 @@
                     <div class="priority-list" id="priorityList"></div>
                     <button class="btn btn-edit" id="editLabelsBtn">
                         ✏️ Edit Priority Labels
+                    </button>
+                </details>
+            </section>
+
+            <section class="priority-list-section">
+                <details>
+                    <summary>View SKU List (Daily Parchi)</summary>
+                    <div class="priority-list" id="skuListDisplay"></div>
+                    <button class="btn btn-edit" id="editSkuListBtn">
+                        ✏️ Edit SKU List
                     </button>
                 </details>
             </section>
@@ -808,6 +822,23 @@
                     <div class="modal-buttons">
                         <button class="btn btn-secondary" id="cancelEditBtn">Cancel</button>
                         <button class="btn btn-primary" id="saveLabelsBtn">💾 Save Labels</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Edit SKU List Modal -->
+            <div class="modal" id="editSkuListModal" style="display: none;">
+                <div class="modal-content modal-large">
+                    <h3>✏️ Edit SKU List (Daily Parchi)</h3>
+                    <p>Enter one SKU per line. These SKUs will be matched against labels to extract tracking IDs.</p>
+                    <div class="cloud-sync-info">
+                        <span class="cloud-icon">☁️</span>
+                        <span>Changes will be saved to the cloud and synced across all devices</span>
+                    </div>
+                    <textarea id="skuListTextarea" rows="20"></textarea>
+                    <div class="modal-buttons">
+                        <button class="btn btn-secondary" id="cancelEditSkuListBtn">Cancel</button>
+                        <button class="btn btn-primary" id="saveSkuListBtn">💾 Save SKU List</button>
                     </div>
                 </div>
             </div>

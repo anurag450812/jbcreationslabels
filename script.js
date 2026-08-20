@@ -88,6 +88,62 @@ let PRIORITY_LABELS = [
     'rk88'
 ];
 
+// SKU list for Daily Parchi extraction
+let SKU_LIST = [
+    '0baby_1', '0baby_1,12,19,24', '0baby_1,2,11,12', '0baby_1,2,12,19', '0baby_1,2,12,24', '0baby_1,2,19,24', '0baby_1,2,8,12', '0baby_1,2,8,19', '0baby_1,2,8,24', '0baby_1,21,27,30', '0baby_1,8,12,19', '0baby_1,8,12,24', '0baby_1,8,19,24',
+    '0baby_10', '0baby_11', '0baby_12,14,23,24', '0baby_12', '0baby_13', '0baby_14', '0baby_15,18,24,28', '0baby_15', '0baby_16', '0baby_17', '0baby_18,25,29,30', '0baby_18', '0baby_19',
+    '0baby_2', '0baby_2,12,19,24', '0baby_2,3,8,13', '0baby_2,8,12,19', '0baby_2,8,12,24', '0baby_2,8,19,24', '0baby_20', '0baby_21', '0baby_22', '0baby_23', '0baby_24', '0baby_25', '0baby_26', '0baby_27', '0baby_28', '0baby_29',
+    '0baby_3', '0baby_30', '0baby_31', '0baby_32', '0baby_33', '0baby_4', '0baby_5', '0baby_6', '0baby_7,22,25,31', '0baby_7', '0baby_8,12,19,24', '0baby_8', '0baby_9',
+    '0shopbaby_1', '0shopbaby_1,12,19,24', '0shopbaby_1,2,11,12', '0shopbaby_1,2,12,19', '0shopbaby_1,2,12,24', '0shopbaby_1,2,19,24', '0shopbaby_1,2,8,12', '0shopbaby_1,2,8,19', '0shopbaby_1,2,8,24', '0shopbaby_1,21,27,30', '0shopbaby_1,8,12,19', '0shopbaby_1,8,12,24', '0shopbaby_1,8,19,24',
+    '0shopbaby_10', '0shopbaby_11', '0shopbaby_12,14,23,24', '0shopbaby_12', '0shopbaby_13', '0shopbaby_14', '0shopbaby_15,18,24,28', '0shopbaby_15', '0shopbaby_16', '0shopbaby_17', '0shopbaby_18,25,29,30', '0shopbaby_18', '0shopbaby_19',
+    '0shopbaby_2', '0shopbaby_2,12,19,24', '0shopbaby_2,3,8,13', '0shopbaby_2,8,12,19', '0shopbaby_2,8,12,24', '0shopbaby_2,8,19,24', '0shopbaby_20', '0shopbaby_21', '0shopbaby_22', '0shopbaby_23', '0shopbaby_24', '0shopbaby_25', '0shopbaby_26', '0shopbaby_27', '0shopbaby_28', '0shopbaby_29',
+    '0shopbaby_3', '0shopbaby_30', '0shopbaby_31', '0shopbaby_32', '0shopbaby_33', '0shopbaby_4', '0shopbaby_5', '0shopbaby_6', '0shopbaby_7,22,25,31', '0shopbaby_7', '0shopbaby_8,12,19,24', '0shopbaby_8', '0shopbaby_9',
+    '1Moti_10,11,17,23,25,29', '1Moti_12,21,22,23,25,28', '1Moti_15,21,22,28,29,31', '1Moti_2,3,5,11,27,33', '1Moti_4,6,8,16,18,19', '1Moti_9,13,15,21,26,32', '1Moti_9,17,20,25,30,31',
+    '1shopmoti_10,11,17,23,25,29', '1shopmoti_12,21,22,23,25,28', '1shopmoti_15,21,22,28,29,31', '1shopmoti_2,3,5,11,27,33', '1shopmoti_4,6,8,16,18,19', '1shopmoti_9,13,15,21,26,32', '1shopmoti_9,17,20,25,30,31',
+    'art01', 'art02', 'art03', 'art04',
+    'bd01', 'bd02', 'bd03', 'bd04', 'bd05', 'bd06', 'bd07', 'bd08', 'bd09', 'bd10', 'bd100', 'bd11', 'bd12', 'bd13', 'bd14', 'bd15', 'bd16', 'bd17', 'bd18', 'bd19', 'bd20', 'bd21', 'bd22', 'bd23', 'bd24', 'bd25', 'bd26', 'bd27', 'bd28', 'bd29', 'bd30', 'bd31', 'bd32', 'bd33', 'bd34', 'bd35', 'bd36', 'bd37', 'bd38', 'bd39', 'bd40', 'bd41', 'bd42', 'bd43', 'bd44', 'bd45', 'bd46', 'bd47', 'bd48', 'bd49', 'bd50', 'bd51', 'bd52', 'bd53', 'bd54', 'bd55', 'bd56', 'bd57', 'bd97', 'bd98', 'bd99',
+    'ch-bd101', 'ch-bd102', 'ch-bd103', 'ch-bd104', 'ch-bd58', 'ch-bd59', 'ch-bd60', 'ch-bd61', 'ch-bd62', 'ch-bd63', 'ch-bd64', 'ch-bd65', 'ch-bd66', 'ch-bd67', 'ch-bd68', 'ch-bd69', 'ch-bd70', 'ch-bd71', 'ch-bd72', 'ch-bd73', 'ch-bd74', 'ch-bd75', 'ch-bd76', 'ch-bd77', 'ch-bd78', 'ch-bd79', 'ch-bd80', 'ch-bd81', 'ch-bd82', 'ch-bd83', 'ch-bd84', 'ch-bd85', 'ch-bd86', 'ch-bd87', 'ch-bd88', 'ch-bd89', 'ch-bd90', 'ch-bd91', 'ch-bd92', 'ch-bd93', 'ch-bd94', 'ch-bd95', 'ch-bd96',
+    'ch-fk11', 'ch-fk12', 'ch-fk13', 'ch-fk14', 'ch-fk15', 'ch-fk16', 'ch-fk17', 'ch-fk18', 'ch-fk19', 'ch-fk20', 'ch-fk21', 'ch-fk22', 'ch-fk23', 'ch-fk24', 'ch-fk25', 'ch-fk26', 'ch-fk27', 'ch-fk28', 'ch-fk29', 'ch-fk30', 'ch-fk31', 'ch-fk32', 'ch-fk33', 'ch-fk34', 'ch-fk35', 'ch-fk36', 'ch-fk37', 'ch-fk38', 'ch-fk39', 'ch-fk40', 'ch-fk41', 'ch-fk42', 'ch-fk43', 'ch-fk44', 'ch-fk45', 'ch-fk46', 'ch-fk47', 'ch-fk48', 'ch-fk49', 'ch-fk50', 'ch-fk51', 'ch-fk52', 'ch-fk53', 'ch-fk54', 'ch-fk55', 'ch-fk56', 'ch-fk57', 'ch-fk58', 'ch-fk59', 'ch-fk60', 'ch-fk61', 'ch-fk62', 'ch-fk63', 'ch-fk64', 'ch-fk65',
+    'ch-gn49', 'ch-gn50', 'ch-gn51', 'ch-gn52', 'ch-gn53', 'ch-gn54',
+    'ch-hr30', 'ch-hr31', 'ch-hr32', 'ch-hr33', 'ch-hr34', 'ch-hr35',
+    'ch-kn21', 'ch-kn22', 'ch-kn23', 'ch-kn24', 'ch-kn25', 'ch-kn26', 'ch-kn27',
+    'ch-mata20',
+    'ch-md24', 'ch-md25', 'ch-md26', 'ch-md27', 'ch-md28', 'ch-md29', 'ch-md30', 'ch-md31', 'ch-md32', 'ch-md33', 'ch-md34', 'ch-md35', 'ch-md36', 'ch-md37', 'ch-md38', 'ch-md39', 'ch-md40', 'ch-md41', 'ch-md42', 'ch-md43', 'ch-md44', 'ch-md45', 'ch-md46', 'ch-md47', 'ch-md48', 'ch-md49', 'ch-md50', 'ch-md51', 'ch-md52', 'ch-md53', 'ch-md54', 'ch-md55', 'ch-md56', 'ch-md57', 'ch-md58', 'ch-md59', 'ch-md60', 'ch-md61', 'ch-md62', 'ch-md63', 'ch-md64', 'ch-md65', 'ch-md66', 'ch-md67', 'ch-md68', 'ch-md69',
+    'ch-ml24', 'ch-ml25', 'ch-ml26', 'ch-ml27', 'ch-ml28', 'ch-ml29', 'ch-ml30', 'ch-ml31', 'ch-ml32', 'ch-ml33', 'ch-ml34', 'ch-ml35', 'ch-ml36', 'ch-ml37', 'ch-ml38', 'ch-ml39', 'ch-ml40', 'ch-ml41', 'ch-ml42', 'ch-ml43', 'ch-ml44', 'ch-ml45', 'ch-ml46', 'ch-ml47', 'ch-ml48', 'ch-ml49', 'ch-ml50', 'ch-ml51', 'ch-ml58', 'ch-ml59',
+    'ch-pr01', 'ch-pr02', 'ch-pr03',
+    'ch-rk31', 'ch-rk32', 'ch-rk33', 'ch-rk34', 'ch-rk35', 'ch-rk36', 'ch-rk37', 'ch-rk38', 'ch-rk39', 'ch-rk40', 'ch-rk41', 'ch-rk42', 'ch-rk43', 'ch-rk44', 'ch-rk45', 'ch-rk46', 'ch-rk47', 'ch-rk48', 'ch-rk49', 'ch-rk50', 'ch-rk51', 'ch-rk52', 'ch-rk53', 'ch-rk69', 'ch-rk70', 'ch-rk71', 'ch-rk72', 'ch-rk73', 'ch-rk74', 'ch-rk76', 'ch-rk77', 'ch-rk78', 'ch-rk79', 'ch-rk80', 'ch-rk81', 'ch-rk82',
+    'ch-saras11', 'ch-saras12',
+    'ch-sv21', 'ch-sv22', 'ch-sv26', 'ch-sv27', 'ch-sv28',
+    'dr01', 'dr02', 'dr03', 'dr04', 'dr05', 'dr06', 'dr07', 'dr08', 'dr09', 'dr10', 'dr11', 'dr12', 'dr13', 'dr14', 'dr15', 'dr16', 'dr17', 'dr18', 'dr19', 'dr20', 'dr21', 'dr22', 'dr23', 'dr24', 'dr25', 'dr26', 'dr27', 'dr28', 'dr29', 'dr30', 'dr31', 'dr32', 'dr33', 'dr34', 'dr35', 'dr36', 'dr37', 'dr38', 'dr39', 'dr40', 'dr41', 'dr42', 'dr43',
+    'fk01', 'fk02', 'fk03', 'fk04', 'fk05', 'fk06', 'fk07', 'fk08', 'fk09', 'fk10',
+    'fr-bd105', 'fr-bd106', 'fr-bd107', 'fr-bd108', 'fr-bd109', 'fr-bd110', 'fr-bd111', 'fr-bd112', 'fr-bd113', 'fr-bd114', 'fr-bd115', 'fr-bd116', 'fr-bd117', 'fr-bd118', 'fr-bd119', 'fr-bd120', 'fr-bd121', 'fr-bd122', 'fr-bd123', 'fr-bd124', 'fr-bd125', 'fr-bd126', 'fr-bd127', 'fr-bd128', 'fr-bd129', 'fr-bd130', 'fr-bd131', 'fr-bd132', 'fr-bd133', 'fr-bd134', 'fr-bd135', 'fr-bd136', 'fr-bd137', 'fr-bd138', 'fr-bd139', 'fr-bd140', 'fr-bd141', 'fr-bd142', 'fr-bd143', 'fr-bd144',
+    'fr-fk100', 'fr-fk101', 'fr-fk102', 'fr-fk103', 'fr-fk104', 'fr-fk105', 'fr-fk106', 'fr-fk107', 'fr-fk108', 'fr-fk109', 'fr-fk110', 'fr-fk111', 'fr-fk112', 'fr-fk113', 'fr-fk114', 'fr-fk115', 'fr-fk66', 'fr-fk67', 'fr-fk68', 'fr-fk69', 'fr-fk70', 'fr-fk71', 'fr-fk72', 'fr-fk73', 'fr-fk74', 'fr-fk75', 'fr-fk76', 'fr-fk77', 'fr-fk78', 'fr-fk79', 'fr-fk80', 'fr-fk81', 'fr-fk82', 'fr-fk83', 'fr-fk84', 'fr-fk85', 'fr-fk86', 'fr-fk87', 'fr-fk88', 'fr-fk89', 'fr-fk90', 'fr-fk91', 'fr-fk92', 'fr-fk93', 'fr-fk94', 'fr-fk95', 'fr-fk96', 'fr-fk97', 'fr-fk98', 'fr-fk99',
+    'fr-gn55', 'fr-gn56', 'fr-gn57', 'fr-gn58', 'fr-gn59', 'fr-gn60',
+    'fr-kn28', 'fr-kn29', 'fr-kn30', 'fr-kn31', 'fr-kn32', 'fr-kn33', 'fr-kn34',
+    'fr-mata21',
+    'fr-md70', 'fr-md71', 'fr-md72', 'fr-md73', 'fr-md74', 'fr-md75', 'fr-md76', 'fr-md77', 'fr-md78', 'fr-md79', 'fr-md80', 'fr-md81',
+    'fr-ml60', 'fr-ml61', 'fr-ml62', 'fr-ml63', 'fr-ml64', 'fr-ml65', 'fr-ml66', 'fr-ml67', 'fr-ml68', 'fr-ml69', 'fr-ml70', 'fr-ml71', 'fr-ml72', 'fr-ml73', 'fr-ml74', 'fr-ml75', 'fr-ml76',
+    'fr-pr13', 'fr-pr14', 'fr-pr15',
+    'fr-rk100', 'fr-rk101', 'fr-rk102', 'fr-rk103', 'fr-rk104', 'fr-rk105', 'fr-rk106', 'fr-rk107', 'fr-rk108', 'fr-rk109', 'fr-rk110', 'fr-rk111', 'fr-rk112', 'fr-rk113', 'fr-rk114', 'fr-rk115', 'fr-rk116', 'fr-rk117', 'fr-rk118', 'fr-rk92', 'fr-rk93', 'fr-rk94', 'fr-rk95', 'fr-rk96', 'fr-rk97', 'fr-rk98', 'fr-rk99',
+    'fr-sv69', 'fr-sv70', 'fr-sv71', 'fr-sv72', 'fr-sv73',
+    'gn01', 'gn02', 'gn03', 'gn04', 'gn05', 'gn06', 'gn07', 'gn08', 'gn09', 'gn10', 'gn11', 'gn12', 'gn13', 'gn14', 'gn15', 'gn16', 'gn17', 'gn18', 'gn19', 'gn20', 'gn21', 'gn22', 'gn23', 'gn24', 'gn25', 'gn26', 'gn27', 'gn28', 'gn29', 'gn30', 'gn31', 'gn32', 'gn33', 'gn34', 'gn35', 'gn36', 'gn37', 'gn38', 'gn39', 'gn40', 'gn41', 'gn42', 'gn43', 'gn44', 'gn45', 'gn46', 'gn47',
+    'hanuman01', 'hanuman02', 'hanuman03', 'hanuman04', 'hanuman05', 'hanuman06', 'hanuman07', 'hanuman08', 'hanuman09', 'hanuman10', 'hanuman11', 'hanuman12', 'hanuman13', 'hanuman14', 'hanuman15', 'hanuman16', 'hanuman17', 'hanuman18', 'hanuman19', 'hanuman20', 'hanuman21', 'hanuman22', 'hanuman23',
+    'hr01', 'hr02', 'hr03', 'hr04', 'hr05', 'hr06', 'hr07', 'hr08', 'hr09', 'hr10', 'hr11', 'hr12', 'hr13', 'hr14', 'hr15', 'hr16', 'hr17', 'hr18', 'hr19', 'hr20', 'hr21', 'hr22', 'hr23', 'hr24', 'hr25', 'hr26', 'hr27', 'hr28', 'hr29', 'hr36', 'hr37', 'hr38', 'hr39', 'hr40', 'hr41', 'hr42', 'hr43', 'hr44', 'hr45', 'hr46', 'hr47', 'hr48', 'hr49', 'hr50', 'hr51', 'hr52',
+    'jesus01', 'jesus02', 'jesus03', 'jesus04', 'jesus05', 'jesus06', 'jesus07', 'jesus08', 'jesus09', 'jesus10', 'jesus11', 'jesus12', 'jesus13', 'jesus14', 'jesus15', 'jesus16', 'jesus17', 'jesus18', 'jesus19', 'jesus20', 'jesus21', 'jesus22', 'jesus23', 'jesus24', 'jesus25', 'jesus26', 'jesus27',
+    'kn01', 'kn02', 'kn03', 'kn04', 'kn09', 'kn10', 'kn11', 'kn12', 'kn13', 'kn14', 'kn15', 'kn16', 'kn17', 'kn18', 'kn19', 'kn20',
+    'ld01',
+    'mata01', 'mata02', 'mata03', 'mata04', 'mata05', 'mata06', 'mata07', 'mata08', 'mata09', 'mata10', 'mata11', 'mata12', 'mata13', 'mata14', 'mata15', 'mata16', 'mata17', 'mata18', 'mata19',
+    'md01', 'md02', 'md03', 'md04', 'md05', 'md06', 'md07', 'md08', 'md09', 'md10', 'md11', 'md12', 'md13', 'md14', 'md15', 'md16', 'md17', 'md18', 'md19', 'md20', 'md21', 'md22', 'md23',
+    'ml01', 'ml02', 'ml03', 'ml04', 'ml05', 'ml06', 'ml07', 'ml08', 'ml09', 'ml10', 'ml11', 'ml12', 'ml13', 'ml14', 'ml15', 'ml16', 'ml17', 'ml18', 'ml19', 'ml20', 'ml21', 'ml22', 'ml23', 'ml52', 'ml53', 'ml54', 'ml55',
+    'pr04', 'pr05', 'pr06', 'pr07', 'pr08', 'pr09', 'pr10', 'pr11', 'pr12',
+    'ram01', 'ram02', 'ram03', 'ram04',
+    'rk01', 'rk02', 'rk028', 'rk03', 'rk04', 'rk05', 'rk06', 'rk07', 'rk08', 'rk09', 'rk10', 'rk11', 'rk12', 'rk13', 'rk14', 'rk15', 'rk16', 'rk17', 'rk18', 'rk19', 'rk20', 'rk21', 'rk22', 'rk23', 'rk24', 'rk25', 'rk26', 'rk27', 'rk28', 'rk29', 'rk30', 'rk54', 'rk55', 'rk56', 'rk57', 'rk58', 'rk59', 'rk60', 'rk61', 'rk62', 'rk63', 'rk64', 'rk65', 'rk66', 'rk67', 'rk68', 'rk69', 'rk70', 'rk71', 'rk72', 'rk73', 'rk74', 'rk75', 'rk76', 'rk77', 'rk78', 'rk79', 'rk80', 'rk81', 'rk82', 'rk83', 'rk84', 'rk85', 'rk86', 'rk87', 'rk88', 'rk89', 'rk90', 'rk91',
+    'sai01',
+    'saras01', 'saras02', 'saras03', 'saras04', 'saras05', 'saras06', 'saras07', 'saras08', 'saras09', 'saras10',
+    'shop0baby_2,3,8,13',
+    'sv01', 'sv02', 'sv03', 'sv04', 'sv05', 'sv06', 'sv07', 'sv08', 'sv09', 'sv10', 'sv11', 'sv12', 'sv13', 'sv14', 'sv15', 'sv16', 'sv17', 'sv18', 'sv19', 'sv20', 'sv23', 'sv24', 'sv25', 'sv26', 'sv27', 'sv28', 'sv29', 'sv30', 'sv31', 'sv32', 'sv33', 'sv34', 'sv35', 'sv36', 'sv37', 'sv38', 'sv39', 'sv40', 'sv41', 'sv42', 'sv43', 'sv44', 'sv45', 'sv46', 'sv47', 'sv48', 'sv49', 'sv50', 'sv51', 'sv52', 'sv53', 'sv54', 'sv55', 'sv56', 'sv57', 'sv58', 'sv59', 'sv60', 'sv61', 'sv62', 'sv63', 'sv64', 'sv65', 'sv66', 'sv67', 'sv68'
+];
+
 // Password for editing
 const PASSWORD_HASH = '324eb71224711aac2b97284a8451afb1092333f44f8ded50c0aa2d0a83a501cf';
 const DEVICE_AUTH_STORAGE_KEY = 'jb_device_authorized_v1';
@@ -546,6 +602,16 @@ const labelsTextarea = document.getElementById('labelsTextarea');
 const saveLabelsBtn = document.getElementById('saveLabelsBtn');
 const cancelEditBtn = document.getElementById('cancelEditBtn');
 
+// SKU List DOM Elements
+const skuListDisplay = document.getElementById('skuListDisplay');
+const editSkuListBtn = document.getElementById('editSkuListBtn');
+const editSkuListModal = document.getElementById('editSkuListModal');
+const skuListTextarea = document.getElementById('skuListTextarea');
+const saveSkuListBtn = document.getElementById('saveSkuListBtn');
+const cancelEditSkuListBtn = document.getElementById('cancelEditSkuListBtn');
+const extractSkuToParchiBtn = document.getElementById('extractSkuToParchiBtn');
+const extractSkuStatus = document.getElementById('extractSkuStatus');
+
 // Label Counter DOM Elements
 const counterUploadArea = document.getElementById('counterUploadArea');
 const counterFileInput = document.getElementById('counterFileInput');
@@ -816,6 +882,9 @@ function initializeApp() {
     // Load priority labels from cloud (async, will update UI when loaded)
     loadPriorityLabelsFromCloud();
     
+    // Load SKU list from cloud (async, will update UI when loaded)
+    loadSkuListFromCloud();
+    
     // Load app configuration from cloud (async, will update settings when loaded)
     loadAppConfigFromCloud();
 
@@ -864,6 +933,233 @@ async function loadPriorityLabelsFromCloud() {
     } catch (error) {
         console.error('Error loading priority labels from cloud:', error);
         // Silently use default labels if load fails
+    }
+}
+
+// ============================================
+// SKU LIST MANAGEMENT (Daily Parchi)
+// ============================================
+
+function displaySkuList() {
+    if (skuListDisplay) {
+        skuListDisplay.innerHTML = SKU_LIST.map(sku =>
+            `<div class="priority-item">${sku}</div>`
+        ).join('');
+    }
+}
+
+async function loadSkuListFromCloud() {
+    if (!GOOGLE_SHEETS_CONFIG.webAppUrl) {
+        console.log('Google Sheets not configured, using default SKU list');
+        displaySkuList();
+        return;
+    }
+
+    try {
+        const url = `${GOOGLE_SHEETS_CONFIG.webAppUrl}?action=getSkuList`;
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: { 'Accept': 'application/json' }
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            if (data.success && data.skus && data.skus.length > 0) {
+                SKU_LIST = data.skus;
+                displaySkuList();
+                console.log(`✅ Loaded ${SKU_LIST.length} SKUs from cloud`);
+                showCloudSyncNotification('✅ SKU list synced from cloud');
+            } else {
+                console.log('No SKU list found in cloud, using defaults');
+                displaySkuList();
+            }
+        }
+    } catch (error) {
+        console.error('Error loading SKU list from cloud:', error);
+        displaySkuList();
+    }
+}
+
+function showEditSkuListModal() {
+    editSkuListModal.style.display = 'flex';
+    skuListTextarea.value = SKU_LIST.join('\n');
+    skuListTextarea.focus();
+}
+
+function hideEditSkuListModal() {
+    editSkuListModal.style.display = 'none';
+}
+
+async function saveSkuList() {
+    const newSkus = skuListTextarea.value
+        .split('\n')
+        .map(sku => sku.trim())
+        .filter(sku => sku.length > 0);
+
+    if (newSkus.length === 0) {
+        alert('Please enter at least one SKU!');
+        return;
+    }
+
+    if (!GOOGLE_SHEETS_CONFIG.webAppUrl) {
+        alert('⚠️ Google Sheets is not configured!\n\nPlease configure Google Sheets integration first to save SKU list globally.');
+        return;
+    }
+
+    saveSkuListBtn.disabled = true;
+    saveSkuListBtn.textContent = '⏳ Saving...';
+
+    try {
+        const response = await fetch(GOOGLE_SHEETS_CONFIG.webAppUrl, {
+            method: 'POST',
+            mode: 'no-cors',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'saveSkuList',
+                skus: newSkus
+            })
+        });
+
+        SKU_LIST = newSkus;
+        displaySkuList();
+        hideEditSkuListModal();
+        alert(`✅ SKU list saved globally!\n\nTotal SKUs: ${SKU_LIST.length}\n\nAll users will now see these updated SKUs.`);
+    } catch (error) {
+        console.error('Error saving SKU list to Google Sheets:', error);
+        alert(`❌ Error saving SKU list: ${error.message}\n\nSKU list was updated locally but may not persist.`);
+        SKU_LIST = newSkus;
+        displaySkuList();
+        hideEditSkuListModal();
+    } finally {
+        saveSkuListBtn.disabled = false;
+        saveSkuListBtn.textContent = '💾 Save SKU List';
+    }
+}
+
+// ============================================
+// SKU EXTRACTION FROM LABELS (Daily Parchi)
+// ============================================
+
+async function extractSkuToDailyParchi() {
+    if (!processedPDF) {
+        alert('⚠️ No processed PDF available. Please process labels first.');
+        return;
+    }
+
+    if (!GOOGLE_SHEETS_CONFIG.webAppUrl) {
+        alert('⚠️ Google Sheets is not configured!\n\nPlease configure Google Sheets integration first.');
+        return;
+    }
+
+    extractSkuToParchiBtn.disabled = true;
+    extractSkuToParchiBtn.textContent = '⏳ Extracting...';
+    extractSkuStatus.style.display = 'block';
+    extractSkuStatus.innerHTML = '<p>Reading sorted PDF for SKU extraction...</p>';
+
+    try {
+        const pdfBytes = await processedPDF.save();
+        const pdfDoc = await pdfjsLib.getDocument({ data: new Uint8Array(pdfBytes) }).promise;
+        const pageCount = pdfDoc.numPages;
+
+        const skuTrackingPairs = [];
+        const seenPairs = new Set();
+        const skuLowerSet = new Set(SKU_LIST.map(s => s.toLowerCase()));
+
+        for (let pageNumber = 1; pageNumber <= pageCount; pageNumber++) {
+            extractSkuStatus.innerHTML = `<p>Scanning page ${pageNumber}/${pageCount}...</p>`;
+
+            const page = await pdfDoc.getPage(pageNumber);
+            const textContent = await page.getTextContent();
+            const pageText = textContent.items.map(item => item.str || '').join(' ');
+            const pageTextLower = pageText.toLowerCase();
+
+            // Check if this page has label signal
+            const hasLabelSignal = hasBarcodeLikeTextForSorter(pageTextLower) || /AWB|TRACKING|SHIP(?:PING)?|PICKUP|DELIVERY|RETURN\s+TO/i.test(pageText);
+            if (!hasLabelSignal) continue;
+
+            // Extract tracking IDs from this page
+            const trackingCandidates = extractTrackingCandidates(pageText);
+            if (trackingCandidates.length === 0) continue;
+
+            const firstTracking = trackingCandidates[0];
+
+            // Match SKUs from this page text
+            for (const sku of SKU_LIST) {
+                const skuLower = sku.toLowerCase();
+                const index = pageTextLower.indexOf(skuLower);
+                if (index !== -1) {
+                    const charAfterSku = pageTextLower.charAt(index + skuLower.length);
+                    if (charAfterSku !== ',' && !/\d/.test(charAfterSku)) {
+                        const pairKey = `${sku}::${firstTracking}`;
+                        if (!seenPairs.has(pairKey)) {
+                            seenPairs.add(pairKey);
+                            skuTrackingPairs.push({ sku, tracking: firstTracking });
+                        }
+                    }
+                }
+            }
+        }
+
+        if (skuTrackingPairs.length === 0) {
+            extractSkuStatus.innerHTML = '<p>⚠️ No SKU matches found in the processed labels.</p>';
+            extractSkuToParchiBtn.disabled = false;
+            extractSkuToParchiBtn.textContent = '📤 Extract SKUs to Daily Parchi';
+            return;
+        }
+
+        // Show confirmation dialog
+        const pairLines = skuTrackingPairs.map(p => `${p.sku}  →  ${p.tracking}`).join('\n');
+        const confirmed = confirm(
+            `📤 Found ${skuTrackingPairs.length} SKU+Tracking pair(s):\n\n` +
+            `${pairLines}\n\n` +
+            `Send these to "Daily Parchi Sku Prints" tab?\n` +
+            `Column A = SKU, Column B = Tracking ID`
+        );
+
+        if (!confirmed) {
+            extractSkuStatus.innerHTML = '<p>Cancelled by user.</p>';
+            extractSkuToParchiBtn.disabled = false;
+            extractSkuToParchiBtn.textContent = '📤 Extract SKUs to Daily Parchi';
+            return;
+        }
+
+        extractSkuStatus.innerHTML = `<p>Sending ${skuTrackingPairs.length} pair(s) to Google Sheets...</p>`;
+
+        const response = await fetch(GOOGLE_SHEETS_CONFIG.webAppUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain' },
+            body: JSON.stringify({
+                action: 'appendDailyParchiSkuPrints',
+                pairs: skuTrackingPairs
+            }),
+            redirect: 'follow'
+        });
+
+        let result;
+        try {
+            const text = await response.text();
+            result = JSON.parse(text);
+        } catch (parseError) {
+            if (response.ok) {
+                result = { success: true, rowsAdded: skuTrackingPairs.length };
+            } else {
+                throw new Error('Failed to send data: ' + response.status);
+            }
+        }
+
+        if (!result.success) {
+            throw new Error(result.message || 'Unknown error');
+        }
+
+        extractSkuStatus.innerHTML = `<p>✅ Done! ${result.rowsAdded} row(s) appended to "Daily Parchi Sku Prints".</p>`;
+        setTimeout(() => { extractSkuStatus.style.display = 'none'; }, 4000);
+
+    } catch (error) {
+        console.error('Error extracting SKUs to Daily Parchi:', error);
+        extractSkuStatus.innerHTML = `<p>❌ Error: ${error.message}</p>`;
+    } finally {
+        extractSkuToParchiBtn.disabled = false;
+        extractSkuToParchiBtn.textContent = '📤 Extract SKUs to Daily Parchi';
     }
 }
 
@@ -1508,6 +1804,33 @@ function setupEventListeners() {
             hideEditLabelsModal();
         }
     });
+
+    // Edit SKU list button
+    if (editSkuListBtn) {
+        editSkuListBtn.addEventListener('click', () => showPasswordModal('editSkuList'));
+    }
+
+    // Edit SKU list modal buttons
+    if (saveSkuListBtn) {
+        saveSkuListBtn.addEventListener('click', saveSkuList);
+    }
+    if (cancelEditSkuListBtn) {
+        cancelEditSkuListBtn.addEventListener('click', hideEditSkuListModal);
+    }
+
+    // Click outside SKU list modal to close
+    if (editSkuListModal) {
+        editSkuListModal.addEventListener('click', (e) => {
+            if (e.target === editSkuListModal) {
+                hideEditSkuListModal();
+            }
+        });
+    }
+
+    // Extract SKU to Daily Parchi button
+    if (extractSkuToParchiBtn) {
+        extractSkuToParchiBtn.addEventListener('click', extractSkuToDailyParchi);
+    }
 
     if (packetParchiGenerateBtn) {
         packetParchiGenerateBtn.addEventListener('click', generatePacketParchiPdf);
@@ -3605,6 +3928,11 @@ function displayResults(total, matched, unmatched, labels, allPages, labelCounts
     // Show results section
     resultsSection.style.display = 'block';
     
+    // Show extract SKU button
+    if (extractSkuToParchiBtn) {
+        extractSkuToParchiBtn.style.display = 'inline-block';
+    }
+    
     // Scroll to results
     resultsSection.scrollIntoView({ behavior: 'smooth' });
 }
@@ -3657,6 +3985,8 @@ function showPasswordModal(action) {
             messageEl.textContent = 'Enter password to delete this history file';
         } else if (action === 'skuAutomationSettings') {
             messageEl.textContent = 'Enter password to unlock SKU automation settings';
+        } else if (action === 'editSkuList') {
+            messageEl.textContent = 'Enter password to edit SKU list';
         }
     }
     
@@ -3686,6 +4016,8 @@ async function checkPassword() {
         } else if (pendingPasswordAction === 'skuAutomationSettings') {
             skuAutomationSettingsUnlocked = true;
             updateSkuAutomationSettingsLock();
+        } else if (pendingPasswordAction === 'editSkuList') {
+            showEditSkuListModal();
         }
         pendingPasswordAction = null;
     } else {
