@@ -1105,6 +1105,9 @@ async function extractSkuToDailyParchi() {
             return;
         }
 
+        // Sort pairs alphabetically by SKU
+        skuTrackingPairs.sort((a, b) => a.sku.localeCompare(b.sku, undefined, { sensitivity: 'base' }));
+
         // Show confirmation dialog
         const pairLines = skuTrackingPairs.map(p => `${p.sku}  →  ${p.tracking}`).join('\n');
         const confirmed = confirm(

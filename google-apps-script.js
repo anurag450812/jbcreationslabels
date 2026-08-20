@@ -1775,21 +1775,29 @@ function handleAppendDailyParchiSkuPrints(data) {
       // Add headers
       sheet.getRange('A1').setValue('SKU');
       sheet.getRange('B1').setValue('Tracking ID');
-      sheet.getRange('A1:B1').setFontWeight('bold');
-      sheet.getRange('A1:B1').setBackground('#4a90d9');
-      sheet.getRange('A1:B1').setFontColor('white');
+      sheet.getRange('C1').setValue('Date');
+      sheet.getRange('D1').setValue('Time');
+      sheet.getRange('A1:D1').setFontWeight('bold');
+      sheet.getRange('A1:D1').setBackground('#4a90d9');
+      sheet.getRange('A1:D1').setFontColor('white');
       sheet.setColumnWidth(1, 200);
       sheet.setColumnWidth(2, 250);
+      sheet.setColumnWidth(3, 120);
+      sheet.setColumnWidth(4, 120);
       Logger.log('Created new sheet: ' + sheetName);
     }
     
-    // Prepare rows to append
+    // Prepare rows to append with date and time
+    var now = new Date();
+    var dateString = Utilities.formatDate(now, Session.getScriptTimeZone(), "yyyy-MM-dd");
+    var timeString = Utilities.formatDate(now, Session.getScriptTimeZone(), "HH:mm:ss");
+    
     var rowsToAppend = [];
     for (var i = 0; i < pairs.length; i++) {
       var sku = String(pairs[i].sku || '').trim();
       var tracking = String(pairs[i].tracking || '').trim();
       if (sku && tracking) {
-        rowsToAppend.push([sku, tracking]);
+        rowsToAppend.push([sku, tracking, dateString, timeString]);
       }
     }
     
@@ -1802,7 +1810,7 @@ function handleAppendDailyParchiSkuPrints(data) {
     
     // Append below existing data
     var startRow = getLastDataRow(sheet, 1) + 1;
-    sheet.getRange(startRow, 1, rowsToAppend.length, 2).setValues(rowsToAppend);
+    sheet.getRange(startRow, 1, rowsToAppend.length, 4).setValues(rowsToAppend);
     SpreadsheetApp.flush();
     
     Logger.log('Appended ' + rowsToAppend.length + ' row(s) to ' + sheetName);
