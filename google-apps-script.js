@@ -1789,7 +1789,12 @@ function handleAppendDailyParchiSkuPrints(data) {
     
     // Prepare rows to append with date and time
     var now = new Date();
-    var dateString = Utilities.formatDate(now, Session.getScriptTimeZone(), "yyyy-MM-dd");
+    var dateForRows = now;
+    if (data.useYesterdayDate) {
+      dateForRows = new Date(now);
+      dateForRows.setDate(dateForRows.getDate() - 1);
+    }
+    var dateString = Utilities.formatDate(dateForRows, Session.getScriptTimeZone(), "yyyy-MM-dd");
     var timeString = Utilities.formatDate(now, Session.getScriptTimeZone(), "HH:mm:ss");
     
     var rowsToAppend = [];

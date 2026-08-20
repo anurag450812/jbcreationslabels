@@ -704,6 +704,8 @@ const fbfOrdersTotalSkus = document.getElementById('fbfOrdersTotalSkus');
 const fbfOrdersRowsAdded = document.getElementById('fbfOrdersRowsAdded');
 const fbfOrdersRowsCopied = document.getElementById('fbfOrdersRowsCopied');
 const fbfOrdersDestSheet = document.getElementById('fbfOrdersDestSheet');
+const fbfSendToParchiBtn = document.getElementById('fbfSendToParchiBtn');
+const fbfSendToParchiStatus = document.getElementById('fbfSendToParchiStatus');
 
 let returnExtractorUploadedFiles = [];
 
@@ -2038,6 +2040,10 @@ function setupEventListeners() {
 
     if (fbfOrdersProcessBtn) {
         fbfOrdersProcessBtn.addEventListener('click', sendFbfOrdersToSheets);
+    }
+
+    if (fbfSendToParchiBtn) {
+        fbfSendToParchiBtn.addEventListener('click', sendFbfSkuToDailyParchi);
     }
 
     // Label finder
@@ -8373,6 +8379,7 @@ function handleFbfOrdersFiles(files) {
     if (fbfOrdersUploadedFiles.length > 0) {
         fbfOrdersProcessBtn.disabled = false;
         fbfOrdersClearBtn.style.display = 'inline-flex';
+        if (fbfSendToParchiBtn) fbfSendToParchiBtn.style.display = 'inline-block';
         updateUploadAreaCopy(fbfOrdersUploadArea, `${fbfOrdersUploadedFiles.length} file(s) ready`, 'Drop more files or click to add more');
         displayFbfOrdersFilesInfo();
     }
@@ -8393,6 +8400,8 @@ function clearFbfOrdersFiles() {
     fbfOrdersStatusSection.style.display = 'none';
     fbfOrdersProcessBtn.disabled = true;
     fbfOrdersClearBtn.style.display = 'none';
+    if (fbfSendToParchiBtn) fbfSendToParchiBtn.style.display = 'none';
+    if (fbfSendToParchiStatus) fbfSendToParchiStatus.style.display = 'none';
     updateUploadAreaCopy(fbfOrdersUploadArea, 'Drop your CSV file here', 'or click to browse (CSV with a SKU column)');
 }
 
@@ -8451,6 +8460,24 @@ function extractSkusFromFbfCsv(text) {
     }
 
     return { skus, skuColumn: header[skuIndex] };
+}
+
+function extractFbfSkuOrderIdPairs(text) {
+    const { header, data } = parseFbfOrdersCSV(text);
+    const skuIndex = header.findIndex(col => col.toLowerCase() === 'sku');
+    const orderIdIndex = header.findIndex(col => col.toLowerCase().replace(/\s+/g, '') === 'orderid' || col.toLowerCase() === 'order id' || col.toLowerCase() === 'order_id');
+    if (skuIndex === -1 || orderIdIndex === -1) return { pairs: [], missingColumns: skuIndex === -1 ? 'SKU' : 'Order Id' };
+
+    const pairs = [];
+    for (const row of data) {
+        const sku = String(row[skuIndex] || '').trim();
+        const orderId = String(row[orderIdIndex] || '').trim();
+        if (sku && orderId) {
+            pairs.push({ sku, orderId });
+        }
+    }
+
+    return { pairs };
 }
 
 function setFbfOrdersProgress(percent, message) {
@@ -8578,5 +8605,119 @@ async function sendFbfOrdersToSheets() {
             fbfOrdersProgressFill.style.backgroundColor = '#ef4444';
         }
         alert(`Error: ${error.message}`);
+    }
+}
+
+async function sendFbfSkuToDailyParchi() {
+    if (fbfOrdersUploadedFiles.length === 0) {
+        alert('⚠️ No CSV files uploaded. Please upload FBF order CSV files first.');
+        return;
+    }
+
+    if (!GOOGLE_SHEETS_CONFIG.webAppUrl) {
+        alert('⚠️ Google Sheets is not configured. Please configure it first.');
+        return;
+    }
+
+    if (fbfSendToParchiBtn) {
+        fbfSendToParchiBtn.disabled = true;
+        fbfSendToParchiBtn.textContent = '⏳ Extracting...';
+    }
+    if (fbfSendToParchiStatus) {
+        fbfSendToParchiStatus.style.display = 'block';
+        fbfSendToParchiStatus.innerHTML = '<p>Reading CSV files for SKU + Order ID pairs...</p>';
+    }
+
+    try {
+        const allPairs = [];
+        const seenPairs = new Set();
+
+        for (const file of fbfOrdersUploadedFiles) {
+            const text = await file.text();
+            const { pairs, missingColumns } = extractFbfSkuOrderIdPairs(text);
+            if (missingColumns) {
+                throw new Error(`Column "${missingColumns}" not found in ${file.name}. Make sure the CSV has both "SKU" and "Order Id" columns.`);
+            }
+            for (const pair of pairs) {
+                const key = `${pair.sku}::${pair.orderId}`;
+                if (!seenPairs.has(key)) {
+                    seenPairs.add(key);
+                    allPairs.push(pair);
+                }
+            }
+        }
+
+        if (allPairs.length === 0) {
+            throw new Error('No SKU + Order ID pairs found in the uploaded CSV files.');
+        }
+
+        // Sort alphabetically by SKU
+        allPairs.sort((a, b) => a.sku.localeCompare(b.sku, undefined, { sensitivity: 'base' }));
+
+        if (fbfSendToParchiStatus) {
+            fbfSendToParchiStatus.innerHTML = `<p>Found ${allPairs.length} SKU + Order ID pair(s). Confirm to send to Daily Parchi.</p>`;
+        }
+
+        // Show confirmation
+        const pairLines = allPairs.slice(0, 30).map(p => `${p.sku}  →  ${p.orderId}`).join('\n');
+        const moreText = allPairs.length > 30 ? `\n... and ${allPairs.length - 30} more` : '';
+        const confirmed = confirm(
+            `📤 Found ${allPairs.length} SKU+Order ID pair(s):\n\n` +
+            `${pairLines}${moreText}\n\n` +
+            `Send these to "Daily Parchi Sku Prints" tab?\n` +
+            `Column A = SKU, Column B = Order ID, Date = Yesterday, Time = Now`
+        );
+
+        if (!confirmed) {
+            if (fbfSendToParchiStatus) fbfSendToParchiStatus.innerHTML = '<p>Cancelled by user.</p>';
+            if (fbfSendToParchiBtn) {
+                fbfSendToParchiBtn.disabled = false;
+                fbfSendToParchiBtn.textContent = '📤 Send SKU + Order ID to Daily Parchi';
+            }
+            return;
+        }
+
+        if (fbfSendToParchiStatus) fbfSendToParchiStatus.innerHTML = `<p>Sending ${allPairs.length} pair(s) to Google Sheets...</p>`;
+
+        const response = await fetch(GOOGLE_SHEETS_CONFIG.webAppUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain' },
+            body: JSON.stringify({
+                action: 'appendDailyParchiSkuPrints',
+                pairs: allPairs.map(p => ({ sku: p.sku, tracking: p.orderId })),
+                useYesterdayDate: true
+            }),
+            redirect: 'follow'
+        });
+
+        let result;
+        try {
+            const text = await response.text();
+            result = JSON.parse(text);
+        } catch (parseError) {
+            if (response.ok) {
+                result = { success: true, rowsAdded: allPairs.length, duplicatesSkipped: 0 };
+            } else {
+                throw new Error('Failed to send data: ' + response.status);
+            }
+        }
+
+        if (!result.success) {
+            throw new Error(result.message || 'Unknown error');
+        }
+
+        if (fbfSendToParchiStatus) {
+            fbfSendToParchiStatus.innerHTML = `<p>✅ Done! ${result.rowsAdded} new row(s) appended to "Daily Parchi Sku Prints".${result.duplicatesSkipped > 0 ? ` (${result.duplicatesSkipped} duplicate Order ID(s) skipped)` : ''}</p>`;
+        }
+        setTimeout(() => { if (fbfSendToParchiStatus) fbfSendToParchiStatus.style.display = 'none'; }, 4000);
+
+    } catch (error) {
+        console.error('Error sending FBF SKU to Daily Parchi:', error);
+        if (fbfSendToParchiStatus) fbfSendToParchiStatus.innerHTML = `<p>❌ Error: ${error.message}</p>`;
+    } finally {
+        if (fbfSendToParchiBtn) {
+            fbfSendToParchiBtn.disabled = false;
+            fbfSendToParchiBtn.textContent = '📤 Send SKU + Order ID to Daily Parchi';
+        }
     }
 }
