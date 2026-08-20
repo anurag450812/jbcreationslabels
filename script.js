@@ -1142,7 +1142,7 @@ async function extractSkuToDailyParchi() {
             result = JSON.parse(text);
         } catch (parseError) {
             if (response.ok) {
-                result = { success: true, rowsAdded: skuTrackingPairs.length };
+                result = { success: true, rowsAdded: skuTrackingPairs.length, duplicatesSkipped: 0 };
             } else {
                 throw new Error('Failed to send data: ' + response.status);
             }
@@ -1152,7 +1152,7 @@ async function extractSkuToDailyParchi() {
             throw new Error(result.message || 'Unknown error');
         }
 
-        extractSkuStatus.innerHTML = `<p>✅ Done! ${result.rowsAdded} row(s) appended to "Daily Parchi Sku Prints".</p>`;
+        extractSkuStatus.innerHTML = `<p>✅ Done! ${result.rowsAdded} new row(s) appended to "Daily Parchi Sku Prints".${result.duplicatesSkipped > 0 ? ` (${result.duplicatesSkipped} duplicate tracking ID(s) skipped)` : ''}</p>`;
         setTimeout(() => { extractSkuStatus.style.display = 'none'; }, 4000);
 
     } catch (error) {

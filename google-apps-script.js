@@ -1808,17 +1808,53 @@ function handleAppendDailyParchiSkuPrints(data) {
       })).setMimeType(ContentService.MimeType.JSON);
     }
     
-    // Append below existing data
+    // Read existing tracking IDs from column B to skip duplicates
+    var existingTrackingIds = {};
+    var lastRow = sheet.getLastRow();
+    if (lastRow > 1) {
+      var trackingValues = sheet.getRange(2, 2, lastRow - 1, 1).getValues();
+      for (var t = 0; t < trackingValues.length; t++) {
+        var existingTracking = String(trackingValues[t][0]).trim();
+        if (existingTracking) {
+          existingTrackingIds[existingTracking] = true;
+        }
+      }
+    }
+    
+    // Filter out duplicates
+    var uniqueRows = [];
+    var duplicateCount = 0;
+    for (var j = 0; j < rowsToAppend.length; j++) {
+      var trackingId = String(rowsToAppend[j][1]).trim();
+      if (!existingTrackingIds[trackingId]) {
+        uniqueRows.push(rowsToAppend[j]);
+        existingTrackingIds[trackingId] = true; // Prevent in-batch duplicates too
+      } else {
+        duplicateCount++;
+      }
+    }
+    
+    if (uniqueRows.length === 0) {
+      return ContentService.createTextOutput(JSON.stringify({
+        success: true,
+        message: 'All ' + duplicateCount + ' tracking ID(s) already exist in the sheet',
+        rowsAdded: 0,
+        duplicatesSkipped: duplicateCount
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+    
+    // Append only unique rows below existing data
     var startRow = getLastDataRow(sheet, 1) + 1;
-    sheet.getRange(startRow, 1, rowsToAppend.length, 4).setValues(rowsToAppend);
+    sheet.getRange(startRow, 1, uniqueRows.length, 4).setValues(uniqueRows);
     SpreadsheetApp.flush();
     
-    Logger.log('Appended ' + rowsToAppend.length + ' row(s) to ' + sheetName);
+    Logger.log('Appended ' + uniqueRows.length + ' unique row(s) to ' + sheetName + ', skipped ' + duplicateCount + ' duplicate(s)');
     
     return ContentService.createTextOutput(JSON.stringify({
       success: true,
       message: 'SKU+Tracking pairs appended successfully',
-      rowsAdded: rowsToAppend.length
+      rowsAdded: uniqueRows.length,
+      duplicatesSkipped: duplicateCount
     })).setMimeType(ContentService.MimeType.JSON);
     
   } catch (error) {
