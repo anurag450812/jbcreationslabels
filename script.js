@@ -284,6 +284,7 @@ let GOOGLE_SHEETS_CONFIG = {
 // Global variables
 let uploadedFiles = [];
 let processedPDF = null;
+let sortedPages = []; // Store sorted page objects for SKU extraction
 let labelOccurrences = {}; // Store label counts globally for use during download
 let pendingPasswordAction = null; // Track which action requires password ('editLabels' or 'googleSheets')
 let pendingFinderDeleteEntryId = null;
@@ -1041,8 +1042,8 @@ async function saveSkuList() {
 // ============================================
 
 async function extractSkuToDailyParchi() {
-    if (!processedPDF) {
-        alert('⚠️ No processed PDF available. Please process labels first.');
+    if (!processedPDF || sortedPages.length === 0) {
+        alert('⚠️ No processed labels available. Please process labels first.');
         return;
     }
 
@@ -1054,31 +1055,26 @@ async function extractSkuToDailyParchi() {
     extractSkuToParchiBtn.disabled = true;
     extractSkuToParchiBtn.textContent = '⏳ Extracting...';
     extractSkuStatus.style.display = 'block';
-    extractSkuStatus.innerHTML = '<p>Reading sorted PDF for SKU extraction...</p>';
 
     try {
-        const pdfBytes = await processedPDF.save();
-        const pdfDoc = await pdfjsLib.getDocument({ data: new Uint8Array(pdfBytes) }).promise;
-        const pageCount = pdfDoc.numPages;
-
         const skuTrackingPairs = [];
         const seenPairs = new Set();
-        const skuLowerSet = new Set(SKU_LIST.map(s => s.toLowerCase()));
+        let scannedPages = 0;
+        let labelPagesScanned = 0;
 
-        for (let pageNumber = 1; pageNumber <= pageCount; pageNumber++) {
-            extractSkuStatus.innerHTML = `<p>Scanning page ${pageNumber}/${pageCount}...</p>`;
+        for (const page of sortedPages) {
+            scannedPages++;
+            extractSkuStatus.innerHTML = `<p>Scanning page ${scannedPages}/${sortedPages.length}...</p>`;
 
-            const page = await pdfDoc.getPage(pageNumber);
-            const textContent = await page.getTextContent();
-            const pageText = textContent.items.map(item => item.str || '').join(' ');
-            const pageTextLower = pageText.toLowerCase();
+            // Only process label pages — skip invoice and non-label pages
+            if (!isSorterLabelPage(page)) continue;
+            labelPagesScanned++;
 
-            // Check if this page has label signal
-            const hasLabelSignal = hasBarcodeLikeTextForSorter(pageTextLower) || /AWB|TRACKING|SHIP(?:PING)?|PICKUP|DELIVERY|RETURN\s+TO/i.test(pageText);
-            if (!hasLabelSignal) continue;
+            const pageText = page.text || '';
+            const pageTextUpper = pageText.toUpperCase();
 
             // Extract tracking IDs from this page
-            const trackingCandidates = extractTrackingCandidates(pageText);
+            const trackingCandidates = extractTrackingCandidates(pageTextUpper);
             if (trackingCandidates.length === 0) continue;
 
             const firstTracking = trackingCandidates[0];
@@ -1086,9 +1082,9 @@ async function extractSkuToDailyParchi() {
             // Match SKUs from this page text
             for (const sku of SKU_LIST) {
                 const skuLower = sku.toLowerCase();
-                const index = pageTextLower.indexOf(skuLower);
+                const index = pageText.indexOf(skuLower);
                 if (index !== -1) {
-                    const charAfterSku = pageTextLower.charAt(index + skuLower.length);
+                    const charAfterSku = pageText.charAt(index + skuLower.length);
                     if (charAfterSku !== ',' && !/\d/.test(charAfterSku)) {
                         const pairKey = `${sku}::${firstTracking}`;
                         if (!seenPairs.has(pairKey)) {
@@ -1100,8 +1096,10 @@ async function extractSkuToDailyParchi() {
             }
         }
 
+        extractSkuStatus.innerHTML = `<p>Scanned ${labelPagesScanned} label page(s) of ${sortedPages.length} total.</p>`;
+
         if (skuTrackingPairs.length === 0) {
-            extractSkuStatus.innerHTML = '<p>⚠️ No SKU matches found in the processed labels.</p>';
+            extractSkuStatus.innerHTML += '<p>⚠️ No SKU matches found in the processed labels.</p>';
             extractSkuToParchiBtn.disabled = false;
             extractSkuToParchiBtn.textContent = '📤 Extract SKUs to Daily Parchi';
             return;
@@ -1110,7 +1108,7 @@ async function extractSkuToDailyParchi() {
         // Show confirmation dialog
         const pairLines = skuTrackingPairs.map(p => `${p.sku}  →  ${p.tracking}`).join('\n');
         const confirmed = confirm(
-            `📤 Found ${skuTrackingPairs.length} SKU+Tracking pair(s):\n\n` +
+            `📤 Found ${skuTrackingPairs.length} SKU+Tracking pair(s) from ${labelPagesScanned} label page(s):\n\n` +
             `${pairLines}\n\n` +
             `Send these to "Daily Parchi Sku Prints" tab?\n` +
             `Column A = SKU, Column B = Tracking ID`
@@ -3107,6 +3105,7 @@ function clearFiles() {
     clearFinderUploadRetryTimer();
     uploadedFiles = [];
     processedPDF = null;
+    sortedPages = [];
     fileInput.value = '';
     processBtn.disabled = true;
     clearBtn.style.display = 'none';
@@ -3251,6 +3250,9 @@ async function processLabels() {
         
         // Sort pages based on priority
         const { priorityPages, otherPages, outputPages, matchedLabels, labelCounts, labelStatPages } = sortPages(allPages);
+        
+        // Store sorted pages globally for SKU extraction
+        sortedPages = outputPages;
         
         // Store label counts globally for use during download
         labelOccurrences = labelCounts;
