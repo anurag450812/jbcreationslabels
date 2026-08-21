@@ -1787,6 +1787,29 @@ function handleAppendDailyParchiSkuPrints(data) {
       Logger.log('Created new sheet: ' + sheetName);
     }
     
+    // Auto-delete rows older than 5 days
+    var lastDataRow = sheet.getLastRow();
+    if (lastDataRow > 1) {
+      var dateValues = sheet.getRange(2, 3, lastDataRow - 1, 1).getValues();
+      var nowMs = new Date().getTime();
+      var cutoffMs = nowMs - (5 * 24 * 60 * 60 * 1000);
+      var rowsToDelete = [];
+      for (var d = 0; d < dateValues.length; d++) {
+        var cellDate = dateValues[d][0];
+        if (cellDate && cellDate instanceof Date && cellDate.getTime() < cutoffMs) {
+          rowsToDelete.push(d + 2); // +2 because row 1 is header, and array is 0-indexed
+        }
+      }
+      // Delete from bottom to top to preserve row indices
+      for (var r = rowsToDelete.length - 1; r >= 0; r--) {
+        sheet.deleteRow(rowsToDelete[r]);
+      }
+      if (rowsToDelete.length > 0) {
+        Logger.log('Deleted ' + rowsToDelete.length + ' row(s) older than 5 days from ' + sheetName);
+        lastDataRow = sheet.getLastRow();
+      }
+    }
+    
     // Prepare rows to append with date and time
     var now = new Date();
     var dateForRows = now;
