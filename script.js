@@ -1043,20 +1043,25 @@ async function saveSkuList() {
 // SKU EXTRACTION FROM LABELS (Daily Parchi)
 // ============================================
 
-async function extractSkuToDailyParchi() {
+async function extractSkuToDailyParchi(automatic = false) {
     if (!processedPDF || sortedPages.length === 0) {
-        alert('⚠️ No processed labels available. Please process labels first.');
-        return;
+        if (!automatic) alert('⚠️ No processed labels available. Please process labels first.');
+        return false;
     }
 
     if (!GOOGLE_SHEETS_CONFIG.webAppUrl) {
-        alert('⚠️ Google Sheets is not configured!\n\nPlease configure Google Sheets integration first.');
-        return;
+        if (!automatic) alert('⚠️ Google Sheets is not configured!\n\nPlease configure Google Sheets integration first.');
+        return false;
     }
 
-    extractSkuToParchiBtn.disabled = true;
-    extractSkuToParchiBtn.textContent = '⏳ Extracting...';
-    extractSkuStatus.style.display = 'block';
+    const btn = extractSkuToParchiBtn;
+    const status = extractSkuStatus;
+
+    if (!automatic && btn) {
+        btn.disabled = true;
+        btn.textContent = '⏳ Extracting...';
+    }
+    if (status) status.style.display = 'block';
 
     try {
         const skuTrackingPairs = [];
@@ -1066,7 +1071,7 @@ async function extractSkuToDailyParchi() {
 
         for (const page of sortedPages) {
             scannedPages++;
-            extractSkuStatus.innerHTML = `<p>Scanning page ${scannedPages}/${sortedPages.length}...</p>`;
+            if (status) status.innerHTML = `<p>Scanning page ${scannedPages}/${sortedPages.length}...</p>`;
 
             // Only process label pages — skip invoice and non-label pages
             if (!isSorterLabelPage(page)) continue;
@@ -1098,35 +1103,41 @@ async function extractSkuToDailyParchi() {
             }
         }
 
-        extractSkuStatus.innerHTML = `<p>Scanned ${labelPagesScanned} label page(s) of ${sortedPages.length} total.</p>`;
+        if (status) status.innerHTML = `<p>Scanned ${labelPagesScanned} label page(s) of ${sortedPages.length} total.</p>`;
 
         if (skuTrackingPairs.length === 0) {
-            extractSkuStatus.innerHTML += '<p>⚠️ No SKU matches found in the processed labels.</p>';
-            extractSkuToParchiBtn.disabled = false;
-            extractSkuToParchiBtn.textContent = '📤 Extract SKUs to Daily Parchi';
-            return;
+            if (status) status.innerHTML += '<p>⚠️ No SKU matches found in the processed labels.</p>';
+            if (!automatic && btn) {
+                btn.disabled = false;
+                btn.textContent = '📤 Extract SKUs to Daily Parchi';
+            }
+            return false;
         }
 
         // Sort pairs alphabetically by SKU
         skuTrackingPairs.sort((a, b) => a.sku.localeCompare(b.sku, undefined, { sensitivity: 'base' }));
 
-        // Show confirmation dialog
-        const pairLines = skuTrackingPairs.map(p => `${p.sku}  →  ${p.tracking}`).join('\n');
-        const confirmed = confirm(
-            `📤 Found ${skuTrackingPairs.length} SKU+Tracking pair(s) from ${labelPagesScanned} label page(s):\n\n` +
-            `${pairLines}\n\n` +
-            `Send these to "Daily Parchi Sku Prints" tab?\n` +
-            `Column A = SKU, Column B = Tracking ID`
-        );
+        // Show confirmation dialog (skip in automatic mode)
+        if (!automatic) {
+            const pairLines = skuTrackingPairs.map(p => `${p.sku}  →  ${p.tracking}`).join('\n');
+            const confirmed = confirm(
+                `📤 Found ${skuTrackingPairs.length} SKU+Tracking pair(s) from ${labelPagesScanned} label page(s):\n\n` +
+                `${pairLines}\n\n` +
+                `Send these to "Daily Parchi Sku Prints" tab?\n` +
+                `Column A = SKU, Column B = Tracking ID`
+            );
 
-        if (!confirmed) {
-            extractSkuStatus.innerHTML = '<p>Cancelled by user.</p>';
-            extractSkuToParchiBtn.disabled = false;
-            extractSkuToParchiBtn.textContent = '📤 Extract SKUs to Daily Parchi';
-            return;
+            if (!confirmed) {
+                if (status) status.innerHTML = '<p>Cancelled by user.</p>';
+                if (btn) {
+                    btn.disabled = false;
+                    btn.textContent = '📤 Extract SKUs to Daily Parchi';
+                }
+                return false;
+            }
         }
 
-        extractSkuStatus.innerHTML = `<p>Sending ${skuTrackingPairs.length} pair(s) to Google Sheets...</p>`;
+        if (status) status.innerHTML = `<p>Sending ${skuTrackingPairs.length} pair(s) to Google Sheets...</p>`;
 
         const response = await fetch(GOOGLE_SHEETS_CONFIG.webAppUrl, {
             method: 'POST',
@@ -1154,15 +1165,19 @@ async function extractSkuToDailyParchi() {
             throw new Error(result.message || 'Unknown error');
         }
 
-        extractSkuStatus.innerHTML = `<p>✅ Done! ${result.rowsAdded} new row(s) appended to "Daily Parchi Sku Prints".${result.duplicatesSkipped > 0 ? ` (${result.duplicatesSkipped} duplicate tracking ID(s) skipped)` : ''}</p>`;
-        setTimeout(() => { extractSkuStatus.style.display = 'none'; }, 4000);
+        if (status) status.innerHTML = `<p>✅ Done! ${result.rowsAdded} new row(s) appended to "Daily Parchi Sku Prints".${result.duplicatesSkipped > 0 ? ` (${result.duplicatesSkipped} duplicate tracking ID(s) skipped)` : ''}</p>`;
+        if (!automatic) setTimeout(() => { if (status) status.style.display = 'none'; }, 4000);
+        return true;
 
     } catch (error) {
         console.error('Error extracting SKUs to Daily Parchi:', error);
-        extractSkuStatus.innerHTML = `<p>❌ Error: ${error.message}</p>`;
+        if (status) status.innerHTML = `<p>❌ Error: ${error.message}</p>`;
+        return false;
     } finally {
-        extractSkuToParchiBtn.disabled = false;
-        extractSkuToParchiBtn.textContent = '📤 Extract SKUs to Daily Parchi';
+        if (!automatic && btn) {
+            btn.disabled = false;
+            btn.textContent = '📤 Extract SKUs to Daily Parchi';
+        }
     }
 }
 
@@ -4296,8 +4311,13 @@ async function deductStockFromGoogleSheets(labelCounts) {
 // Updated download function with stock deduction
 async function downloadSortedPDF() {
     if (!processedPDF) return;
-    
+
     try {
+        // Auto-send SKUs to Daily Parchi before downloading
+        if (sortedPages.length > 0 && GOOGLE_SHEETS_CONFIG.webAppUrl) {
+            await extractSkuToDailyParchi(true);
+        }
+
         const pdfBytes = await processedPDF.save();
         const blob = new Blob([pdfBytes], { type: 'application/pdf' });
         const url = URL.createObjectURL(blob);
@@ -8505,6 +8525,9 @@ async function sendFbfOrdersToSheets() {
         fbfOrdersResultsSection.style.display = 'none';
     }
 
+    // Auto-send SKU + Order ID to Daily Parchi first
+    await sendFbfSkuToDailyParchi(true);
+
     setFbfOrdersProgress(0, 'Reading uploaded CSV file(s)...');
 
     try {
@@ -8608,18 +8631,18 @@ async function sendFbfOrdersToSheets() {
     }
 }
 
-async function sendFbfSkuToDailyParchi() {
+async function sendFbfSkuToDailyParchi(automatic = false) {
     if (fbfOrdersUploadedFiles.length === 0) {
-        alert('⚠️ No CSV files uploaded. Please upload FBF order CSV files first.');
-        return;
+        if (!automatic) alert('⚠️ No CSV files uploaded. Please upload FBF order CSV files first.');
+        return false;
     }
 
     if (!GOOGLE_SHEETS_CONFIG.webAppUrl) {
-        alert('⚠️ Google Sheets is not configured. Please configure it first.');
-        return;
+        if (!automatic) alert('⚠️ Google Sheets is not configured. Please configure it first.');
+        return false;
     }
 
-    if (fbfSendToParchiBtn) {
+    if (!automatic && fbfSendToParchiBtn) {
         fbfSendToParchiBtn.disabled = true;
         fbfSendToParchiBtn.textContent = '⏳ Extracting...';
     }
@@ -8658,23 +8681,25 @@ async function sendFbfSkuToDailyParchi() {
             fbfSendToParchiStatus.innerHTML = `<p>Found ${allPairs.length} SKU + Order ID pair(s). Confirm to send to Daily Parchi.</p>`;
         }
 
-        // Show confirmation
-        const pairLines = allPairs.slice(0, 30).map(p => `${p.sku}  →  ${p.orderId}`).join('\n');
-        const moreText = allPairs.length > 30 ? `\n... and ${allPairs.length - 30} more` : '';
-        const confirmed = confirm(
-            `📤 Found ${allPairs.length} SKU+Order ID pair(s):\n\n` +
-            `${pairLines}${moreText}\n\n` +
-            `Send these to "Daily Parchi Sku Prints" tab?\n` +
-            `Column A = SKU, Column B = Order ID, Date = Yesterday, Time = Now`
-        );
+        // Show confirmation (skip in automatic mode)
+        if (!automatic) {
+            const pairLines = allPairs.slice(0, 30).map(p => `${p.sku}  →  ${p.orderId}`).join('\n');
+            const moreText = allPairs.length > 30 ? `\n... and ${allPairs.length - 30} more` : '';
+            const confirmed = confirm(
+                `📤 Found ${allPairs.length} SKU+Order ID pair(s):\n\n` +
+                `${pairLines}${moreText}\n\n` +
+                `Send these to "Daily Parchi Sku Prints" tab?\n` +
+                `Column A = SKU, Column B = Order ID, Date = Yesterday, Time = Now`
+            );
 
-        if (!confirmed) {
-            if (fbfSendToParchiStatus) fbfSendToParchiStatus.innerHTML = '<p>Cancelled by user.</p>';
-            if (fbfSendToParchiBtn) {
-                fbfSendToParchiBtn.disabled = false;
-                fbfSendToParchiBtn.textContent = '📤 Send SKU + Order ID to Daily Parchi';
+            if (!confirmed) {
+                if (fbfSendToParchiStatus) fbfSendToParchiStatus.innerHTML = '<p>Cancelled by user.</p>';
+                if (fbfSendToParchiBtn) {
+                    fbfSendToParchiBtn.disabled = false;
+                    fbfSendToParchiBtn.textContent = '📤 Send SKU + Order ID to Daily Parchi';
+                }
+                return false;
             }
-            return;
         }
 
         if (fbfSendToParchiStatus) fbfSendToParchiStatus.innerHTML = `<p>Sending ${allPairs.length} pair(s) to Google Sheets...</p>`;
@@ -8709,13 +8734,15 @@ async function sendFbfSkuToDailyParchi() {
         if (fbfSendToParchiStatus) {
             fbfSendToParchiStatus.innerHTML = `<p>✅ Done! ${result.rowsAdded} new row(s) appended to "Daily Parchi Sku Prints".${result.duplicatesSkipped > 0 ? ` (${result.duplicatesSkipped} duplicate Order ID(s) skipped)` : ''}</p>`;
         }
-        setTimeout(() => { if (fbfSendToParchiStatus) fbfSendToParchiStatus.style.display = 'none'; }, 4000);
+        if (!automatic) setTimeout(() => { if (fbfSendToParchiStatus) fbfSendToParchiStatus.style.display = 'none'; }, 4000);
+        return true;
 
     } catch (error) {
         console.error('Error sending FBF SKU to Daily Parchi:', error);
         if (fbfSendToParchiStatus) fbfSendToParchiStatus.innerHTML = `<p>❌ Error: ${error.message}</p>`;
+        return false;
     } finally {
-        if (fbfSendToParchiBtn) {
+        if (!automatic && fbfSendToParchiBtn) {
             fbfSendToParchiBtn.disabled = false;
             fbfSendToParchiBtn.textContent = '📤 Send SKU + Order ID to Daily Parchi';
         }
