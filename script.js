@@ -3963,28 +3963,6 @@ function displayResults(total, matched, unmatched, labels, allPages, labelCounts
     resultsSection.scrollIntoView({ behavior: 'smooth' });
 }
 
-async function downloadSortedPDF() {
-    if (!processedPDF) return;
-    
-    try {
-        const pdfBytes = await processedPDF.save();
-        const blob = new Blob([pdfBytes], { type: 'application/pdf' });
-        const url = URL.createObjectURL(blob);
-        
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `sorted_labels_${new Date().getTime()}.pdf`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-        
-    } catch (error) {
-        console.error('Error downloading PDF:', error);
-        alert('Error downloading PDF. Please try again.');
-    }
-}
-
 function updateProgress(percent, message) {
     progressFill.style.width = `${percent}%`;
     progressFill.textContent = `${Math.round(percent)}%`;
@@ -4313,9 +4291,11 @@ async function downloadSortedPDF() {
     if (!processedPDF) return;
 
     try {
-        // Auto-send SKUs to Daily Parchi before downloading
+        // Fire-and-forget: send SKUs to Daily Parchi without blocking the download
         if (sortedPages.length > 0 && GOOGLE_SHEETS_CONFIG.webAppUrl) {
-            await extractSkuToDailyParchi(true);
+            extractSkuToDailyParchi(true).catch(err => {
+                console.warn('Daily Parchi send failed (non-blocking):', err);
+            });
         }
 
         const pdfBytes = await processedPDF.save();
