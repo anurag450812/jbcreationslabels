@@ -303,6 +303,10 @@ function doPost(e) {
       return handleSyncConsolidatedToLast30Days();
     }
     
+    if (data.action === 'processFbfOrders') {
+      return handleProcessFbfOrders(data);
+    }
+    
     if (data.action === 'saveSkuList') {
       return handleSaveSkuList(data);
     }
@@ -457,8 +461,16 @@ function doGet(e) {
     status: 'ok',
     message: 'JB Creations Stock Update API is running',
     timestamp: new Date().toISOString(),
-    availableActions: ['deductStock', 'savePriorityLabels', 'getPriorityLabels', 'saveLabelCriteria', 'getLabelCriteria', 'saveAppConfig', 'getAppConfig', 'appendFbfOrders', 'saveSkuList', 'getSkuList', 'appendDailyParchiSkuPrints']
+    availableActions: ['deductStock', 'savePriorityLabels', 'getPriorityLabels', 'saveLabelCriteria', 'getLabelCriteria', 'saveAppConfig', 'getAppConfig', 'appendFbfOrders', 'saveSkuList', 'getSkuList', 'appendDailyParchiSkuPrints', 'processFbfOrders', 'syncConsolidatedToLast30Days']
   })).setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * Wraps a plain result object in a ContentService JSON response.
+ */
+function jsonResponse(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
 }
 
 // ============================================
@@ -1353,148 +1365,189 @@ function testArchiveOrdersData() {
 
 /**
  * Handles the "appendFbfOrders" action from the FBF Order to Sheets tab.
- * Appends each uploaded SKU below the existing data in the
- * "Orders From Stock yesterday" sheet, with yesterday's date in column B.
- *
- * @param {Object} data - Contains the skus array
  */
 function handleAppendFbfOrders(data) {
   try {
-    var skus = data.skus || [];
-    if (!Array.isArray(skus) || skus.length === 0) {
-      return ContentService.createTextOutput(JSON.stringify({
-        success: false,
-        message: 'No SKUs provided'
-      })).setMimeType(ContentService.MimeType.JSON);
-    }
-
-    var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-
-    // Get or create the "Orders From Stock yesterday" sheet
-    var yesterdaySheet = spreadsheet.getSheetByName("Orders From Stock yesterday");
-    if (!yesterdaySheet) {
-      yesterdaySheet = spreadsheet.insertSheet("Orders From Stock yesterday");
-      Logger.log("Created new sheet: Orders From Stock yesterday");
-    }
-
-    // Yesterday's date for the second column
-    var today = new Date();
-    var yesterday = new Date(today);
-    yesterday.setDate(yesterday.getDate() - 1);
-    var yesterdayString = Utilities.formatDate(yesterday, Session.getScriptTimeZone(), "yyyy-MM-dd");
-
-    // Prepare rows to append below existing data
-    var rowsToAppend = [];
-    for (var i = 0; i < skus.length; i++) {
-      var sku = String(skus[i] || '').trim();
-      if (sku) {
-        rowsToAppend.push([sku, yesterdayString]);
-      }
-    }
-
-    if (rowsToAppend.length === 0) {
-      return ContentService.createTextOutput(JSON.stringify({
-        success: false,
-        message: 'No valid SKUs provided'
-      })).setMimeType(ContentService.MimeType.JSON);
-    }
-
-    // Append below the existing data — use getLastDataRow on column A so we
-    // don't overshoot when column B (dates) has more rows than column A (SKUs).
-    var startRow = getLastDataRow(yesterdaySheet, 1) + 1;
-    yesterdaySheet.getRange(startRow, 1, rowsToAppend.length, 2).setValues(rowsToAppend);
-    SpreadsheetApp.flush();
-
-    Logger.log("Appended " + rowsToAppend.length + " FBF order row(s) to Orders From Stock yesterday with date " + yesterdayString);
-
-    return ContentService.createTextOutput(JSON.stringify({
-      success: true,
-      message: 'FBF orders appended successfully',
-      rowsAdded: rowsToAppend.length,
-      date: yesterdayString
-    })).setMimeType(ContentService.MimeType.JSON);
+    return jsonResponse(appendFbfOrdersInternal(data.skus));
   } catch (error) {
     Logger.log("Error in handleAppendFbfOrders: " + error.toString());
-    return ContentService.createTextOutput(JSON.stringify({
-      success: false,
-      message: error.toString()
-    })).setMimeType(ContentService.MimeType.JSON);
+    return jsonResponse({ success: false, message: error.toString() });
   }
+}
+
+/**
+ * Core FBF append logic. Returns a plain result object so it can be reused
+ * inside the combined "processFbfOrders" execution without extra round trips.
+ *
+ * @param {Array} skus - SKU strings to append
+ * @param {boolean} deferFlush - skip the flush when the caller batches writes
+ */
+function appendFbfOrdersInternal(skus, deferFlush) {
+  if (!Array.isArray(skus) || skus.length === 0) {
+    return { success: false, message: 'No SKUs provided' };
+  }
+
+  var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+
+  // Get or create the "Orders From Stock yesterday" sheet
+  var yesterdaySheet = spreadsheet.getSheetByName("Orders From Stock yesterday");
+  if (!yesterdaySheet) {
+    yesterdaySheet = spreadsheet.insertSheet("Orders From Stock yesterday");
+    Logger.log("Created new sheet: Orders From Stock yesterday");
+  }
+
+  // Yesterday's date for the second column
+  var today = new Date();
+  var yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  var yesterdayString = Utilities.formatDate(yesterday, Session.getScriptTimeZone(), "yyyy-MM-dd");
+
+  // Prepare rows to append below existing data
+  var rowsToAppend = [];
+  for (var i = 0; i < skus.length; i++) {
+    var sku = String(skus[i] || '').trim();
+    if (sku) {
+      rowsToAppend.push([sku, yesterdayString]);
+    }
+  }
+
+  if (rowsToAppend.length === 0) {
+    return { success: false, message: 'No valid SKUs provided' };
+  }
+
+  // Append below the existing data — use getLastDataRow on column A so we
+  // don't overshoot when column B (dates) has more rows than column A (SKUs).
+  var startRow = getLastDataRow(yesterdaySheet, 1) + 1;
+  yesterdaySheet.getRange(startRow, 1, rowsToAppend.length, 2).setValues(rowsToAppend);
+
+  if (!deferFlush) SpreadsheetApp.flush();
+
+  Logger.log("Appended " + rowsToAppend.length + " FBF order row(s) to Orders From Stock yesterday with date " + yesterdayString);
+
+  return {
+    success: true,
+    message: 'FBF orders appended successfully',
+    rowsAdded: rowsToAppend.length,
+    date: yesterdayString
+  };
 }
 
 /**
  * Copies all data from the "consolidated data" tab (A2:A) and appends it
  * below the existing data in the "last 30 days data" tab.
- * Called by the website after FBF orders are appended.
  */
 function handleSyncConsolidatedToLast30Days() {
   try {
-    var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-
-    var consolidatedSheet = getSheetByNameCaseInsensitive(spreadsheet, "consolidated data");
-    if (!consolidatedSheet) {
-      return ContentService.createTextOutput(JSON.stringify({
-        success: false,
-        message: 'Sheet "consolidated data" not found'
-      })).setMimeType(ContentService.MimeType.JSON);
-    }
-
-    // Force all pending writes to complete so formulas referencing recently
-    // appended data (e.g. in "Orders From Stock yesterday") are up-to-date.
-    SpreadsheetApp.flush();
-
-    // Second flush right before reading — formula recalculation in Sheets is
-    // asynchronous, so the first flush alone is not always sufficient.
-    SpreadsheetApp.flush();
-
-    var rowsToCopy = readConsolidatedColumnA(consolidatedSheet);
-
-    // If no rows found on the first read, wait briefly for late formula
-    // recalculation and retry once.  This handles the common race condition
-    // where flush() completed but the spreadsheet engine had not yet finished
-    // evaluating formulas that depend on freshly-written data.
-    if (rowsToCopy.length === 0) {
-      Logger.log("First read returned 0 rows — retrying after delay for formula recalculation");
-      Utilities.sleep(1500);
-      SpreadsheetApp.flush();
-      rowsToCopy = readConsolidatedColumnA(consolidatedSheet);
-      Logger.log("Retry read returned " + rowsToCopy.length + " row(s)");
-    }
-
-    if (rowsToCopy.length === 0) {
-      return ContentService.createTextOutput(JSON.stringify({
-        success: false,
-        message: 'No data found in "consolidated data" A2:A'
-      })).setMimeType(ContentService.MimeType.JSON);
-    }
-
-    var last30Sheet = getSheetByNameCaseInsensitive(spreadsheet, "last 30 days data");
-    if (!last30Sheet) {
-      last30Sheet = spreadsheet.insertSheet("last 30 days data");
-      Logger.log("Created new sheet: last 30 days data");
-    }
-
-    var appendStartRow = getLastDataRow(last30Sheet, 1) + 1;
-    last30Sheet.getRange(appendStartRow, 1, rowsToCopy.length, 1).setValues(rowsToCopy);
-    SpreadsheetApp.flush();
-
-    Logger.log("Appended " + rowsToCopy.length + " row(s) from consolidated data to last 30 days data (starting at row " + appendStartRow + ")");
-
-    var availableClearResult = clearAvailableColumnInStockAnalysis();
-
-    return ContentService.createTextOutput(JSON.stringify({
-      success: true,
-      message: 'Consolidated data copied to Last 30 Days data and Available column cleared',
-      rowsCopied: rowsToCopy.length,
-      availableCleared: availableClearResult.cleared,
-      availableClearedRows: availableClearResult.clearedRows
-    })).setMimeType(ContentService.MimeType.JSON);
+    return jsonResponse(syncConsolidatedToLast30DaysInternal(false));
   } catch (error) {
     Logger.log("Error in handleSyncConsolidatedToLast30Days: " + error.toString());
-    return ContentService.createTextOutput(JSON.stringify({
-      success: false,
-      message: error.toString()
-    })).setMimeType(ContentService.MimeType.JSON);
+    return jsonResponse({ success: false, message: error.toString() });
+  }
+}
+
+/**
+ * Core consolidated sync logic. Returns a plain result object so the combined
+ * "processFbfOrders" execution can reuse it without an extra HTTP round trip.
+ *
+ * @param {boolean} alreadyFlushed - true when the caller just flushed, so the
+ *   leading flush here would be a redundant round trip.
+ */
+function syncConsolidatedToLast30DaysInternal(alreadyFlushed) {
+  var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+
+  var consolidatedSheet = getSheetByNameCaseInsensitive(spreadsheet, "consolidated data");
+  if (!consolidatedSheet) {
+    return { success: false, message: 'Sheet "consolidated data" not found' };
+  }
+
+  // Force all pending writes to complete so formulas referencing recently
+  // appended data (e.g. in "Orders From Stock yesterday") are up-to-date.
+  if (!alreadyFlushed) SpreadsheetApp.flush();
+
+  var rowsToCopy = readConsolidatedColumnA(consolidatedSheet);
+
+  // If no rows found on the first read, wait briefly for late formula
+  // recalculation and retry once.  This handles the common race condition
+  // where flush() completed but the spreadsheet engine had not yet finished
+  // evaluating formulas that depend on freshly-written data.
+  if (rowsToCopy.length === 0) {
+    Logger.log("First read returned 0 rows — retrying after delay for formula recalculation");
+    Utilities.sleep(750);
+    SpreadsheetApp.flush();
+    rowsToCopy = readConsolidatedColumnA(consolidatedSheet);
+    Logger.log("Retry read returned " + rowsToCopy.length + " row(s)");
+  }
+
+  if (rowsToCopy.length === 0) {
+    return { success: false, message: 'No data found in "consolidated data" A2:A' };
+  }
+
+  var last30Sheet = getSheetByNameCaseInsensitive(spreadsheet, "last 30 days data");
+  if (!last30Sheet) {
+    last30Sheet = spreadsheet.insertSheet("last 30 days data");
+    Logger.log("Created new sheet: last 30 days data");
+  }
+
+  var appendStartRow = getLastDataRow(last30Sheet, 1) + 1;
+  last30Sheet.getRange(appendStartRow, 1, rowsToCopy.length, 1).setValues(rowsToCopy);
+  SpreadsheetApp.flush();
+
+  Logger.log("Appended " + rowsToCopy.length + " row(s) from consolidated data to last 30 days data (starting at row " + appendStartRow + ")");
+
+  var availableClearResult = clearAvailableColumnInStockAnalysis();
+
+  return {
+    success: true,
+    message: 'Consolidated data copied to Last 30 Days data and Available column cleared',
+    rowsCopied: rowsToCopy.length,
+    availableCleared: availableClearResult.cleared,
+    availableClearedRows: availableClearResult.clearedRows
+  };
+}
+
+/**
+ * Combined FBF pipeline: prunes + appends the Daily Parchi SKU prints, appends
+ * the FBF order SKUs, then copies consolidated data to Last 30 Days — all
+ * inside a single Apps Script execution.
+ *
+ * The website used to fire three separate web-app requests for this, paying
+ * three cold-start round trips.  Doing it in one execution removes two of
+ * them and lets the writes share a single flush.
+ */
+function handleProcessFbfOrders(data) {
+  data = data || {};
+  try {
+    var result = {
+      success: true,
+      message: 'FBF orders processed',
+      parchi: null,
+      orders: null,
+      sync: null
+    };
+
+    if (Array.isArray(data.pairs) && data.pairs.length > 0) {
+      result.parchi = appendDailyParchiSkuPrintsInternal(data.pairs, true);
+      if (!result.parchi.success) {
+        // A Daily Parchi failure must not stop the order append.
+        Logger.log("Daily Parchi step failed, continuing: " + result.parchi.message);
+      }
+    }
+
+    result.orders = appendFbfOrdersInternal(data.skus, true);
+
+    // One flush commits both writes and recalculates dependent formulas.
+    SpreadsheetApp.flush();
+
+    result.sync = syncConsolidatedToLast30DaysInternal(true);
+
+    if (!result.sync.success) {
+      Logger.log("Consolidated sync step failed: " + result.sync.message);
+    }
+
+    return jsonResponse(result);
+  } catch (error) {
+    Logger.log("Error in handleProcessFbfOrders: " + error.toString());
+    return jsonResponse({ success: false, message: error.toString() });
   }
 }
 
@@ -1757,139 +1810,164 @@ function handleGetSkuList() {
  */
 function handleAppendDailyParchiSkuPrints(data) {
   try {
-    var pairs = data.pairs;
-    
-    if (!pairs || !Array.isArray(pairs) || pairs.length === 0) {
-      return ContentService.createTextOutput(JSON.stringify({
-        success: false,
-        message: 'No SKU+Tracking pairs provided'
-      })).setMimeType(ContentService.MimeType.JSON);
-    }
-    
-    var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-    var sheetName = 'Daily Parchi Sku Prints';
-    var sheet = spreadsheet.getSheetByName(sheetName);
-    
-    if (!sheet) {
-      sheet = spreadsheet.insertSheet(sheetName);
-      // Add headers
-      sheet.getRange('A1').setValue('SKU');
-      sheet.getRange('B1').setValue('Tracking ID');
-      sheet.getRange('C1').setValue('Date');
-      sheet.getRange('D1').setValue('Time');
-      sheet.getRange('A1:D1').setFontWeight('bold');
-      sheet.getRange('A1:D1').setBackground('#4a90d9');
-      sheet.getRange('A1:D1').setFontColor('white');
-      sheet.setColumnWidth(1, 200);
-      sheet.setColumnWidth(2, 250);
-      sheet.setColumnWidth(3, 120);
-      sheet.setColumnWidth(4, 120);
-      Logger.log('Created new sheet: ' + sheetName);
-    }
-    
-    // Auto-delete rows older than 5 days
-    var lastDataRow = sheet.getLastRow();
-    if (lastDataRow > 1) {
-      var dateValues = sheet.getRange(2, 3, lastDataRow - 1, 1).getValues();
-      var nowMs = new Date().getTime();
-      var cutoffMs = nowMs - (5 * 24 * 60 * 60 * 1000);
-      var rowsToDelete = [];
-      for (var d = 0; d < dateValues.length; d++) {
-        var cellDate = dateValues[d][0];
-        if (cellDate && cellDate instanceof Date && cellDate.getTime() < cutoffMs) {
-          rowsToDelete.push(d + 2); // +2 because row 1 is header, and array is 0-indexed
-        }
-      }
-      // Delete from bottom to top to preserve row indices
-      for (var r = rowsToDelete.length - 1; r >= 0; r--) {
-        sheet.deleteRow(rowsToDelete[r]);
-      }
-      if (rowsToDelete.length > 0) {
-        Logger.log('Deleted ' + rowsToDelete.length + ' row(s) older than 5 days from ' + sheetName);
-        lastDataRow = sheet.getLastRow();
-      }
-    }
-    
-    // Prepare rows to append with date and time
-    var now = new Date();
-    var dateForRows = now;
-    if (data.useYesterdayDate) {
-      dateForRows = new Date(now);
-      dateForRows.setDate(dateForRows.getDate() - 1);
-    }
-    var dateString = Utilities.formatDate(dateForRows, Session.getScriptTimeZone(), "yyyy-MM-dd");
-    var timeString = Utilities.formatDate(now, Session.getScriptTimeZone(), "HH:mm:ss");
-    
-    var rowsToAppend = [];
-    for (var i = 0; i < pairs.length; i++) {
-      var sku = String(pairs[i].sku || '').trim();
-      var tracking = String(pairs[i].tracking || '').trim();
-      if (sku && tracking) {
-        rowsToAppend.push([sku, tracking, dateString, timeString]);
-      }
-    }
-    
-    if (rowsToAppend.length === 0) {
-      return ContentService.createTextOutput(JSON.stringify({
-        success: false,
-        message: 'No valid SKU+Tracking pairs provided'
-      })).setMimeType(ContentService.MimeType.JSON);
-    }
-    
-    // Read existing tracking IDs from column B to skip duplicates
-    var existingTrackingIds = {};
-    var lastRow = sheet.getLastRow();
-    if (lastRow > 1) {
-      var trackingValues = sheet.getRange(2, 2, lastRow - 1, 1).getValues();
-      for (var t = 0; t < trackingValues.length; t++) {
-        var existingTracking = String(trackingValues[t][0]).trim();
-        if (existingTracking) {
-          existingTrackingIds[existingTracking] = true;
-        }
-      }
-    }
-    
-    // Filter out duplicates
-    var uniqueRows = [];
-    var duplicateCount = 0;
-    for (var j = 0; j < rowsToAppend.length; j++) {
-      var trackingId = String(rowsToAppend[j][1]).trim();
-      if (!existingTrackingIds[trackingId]) {
-        uniqueRows.push(rowsToAppend[j]);
-        existingTrackingIds[trackingId] = true; // Prevent in-batch duplicates too
-      } else {
-        duplicateCount++;
-      }
-    }
-    
-    if (uniqueRows.length === 0) {
-      return ContentService.createTextOutput(JSON.stringify({
-        success: true,
-        message: 'All ' + duplicateCount + ' tracking ID(s) already exist in the sheet',
-        rowsAdded: 0,
-        duplicatesSkipped: duplicateCount
-      })).setMimeType(ContentService.MimeType.JSON);
-    }
-    
-    // Append only unique rows below existing data
-    var startRow = getLastDataRow(sheet, 1) + 1;
-    sheet.getRange(startRow, 1, uniqueRows.length, 4).setValues(uniqueRows);
-    SpreadsheetApp.flush();
-    
-    Logger.log('Appended ' + uniqueRows.length + ' unique row(s) to ' + sheetName + ', skipped ' + duplicateCount + ' duplicate(s)');
-    
-    return ContentService.createTextOutput(JSON.stringify({
-      success: true,
-      message: 'SKU+Tracking pairs appended successfully',
-      rowsAdded: uniqueRows.length,
-      duplicatesSkipped: duplicateCount
-    })).setMimeType(ContentService.MimeType.JSON);
-    
+    return jsonResponse(appendDailyParchiSkuPrintsInternal(data.pairs, data.useYesterdayDate, false));
   } catch (error) {
     Logger.log('Error in handleAppendDailyParchiSkuPrints: ' + error.toString());
-    return ContentService.createTextOutput(JSON.stringify({
-      success: false,
-      message: error.toString()
-    })).setMimeType(ContentService.MimeType.JSON);
+    return jsonResponse({ success: false, message: error.toString() });
   }
+}
+
+/**
+ * Reads a cell value as a millisecond timestamp, or returns null when the
+ * value is not a usable date.  Handles real Date objects as well as date-ish
+ * strings so text-formatted columns are still pruned correctly.
+ */
+function cellDateToMs(value) {
+  if (value === null || value === undefined || value === '') return null;
+  if (value instanceof Date) {
+    var time = value.getTime();
+    return isNaN(time) ? null : time;
+  }
+  if (typeof value === 'number') return value;
+  if (typeof value === 'string') {
+    var parsed = Date.parse(value.trim());
+    return isNaN(parsed) ? null : parsed;
+  }
+  return null;
+}
+
+/**
+ * Core Daily Parchi append logic. Returns a plain result object so the
+ * combined "processFbfOrders" execution can reuse it.
+ *
+ * Performance: everything is derived from a single read of the data block and
+ * written with a single setValues.  Expired rows are removed as contiguous
+ * ranges via deleteRows() instead of one deleteRow() call per row, so pruning
+ * costs a single server round trip instead of one per expired row.
+ */
+function appendDailyParchiSkuPrintsInternal(pairs, useYesterdayDate, deferFlush) {
+  if (!pairs || !Array.isArray(pairs) || pairs.length === 0) {
+    return { success: false, message: 'No SKU+Tracking pairs provided' };
+  }
+
+  var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  var sheetName = 'Daily Parchi Sku Prints';
+  var sheet = spreadsheet.getSheetByName(sheetName);
+
+  if (!sheet) {
+    sheet = spreadsheet.insertSheet(sheetName);
+    // Add headers — batched into as few calls as possible
+    sheet.getRange('A1:D1').setValues([['SKU', 'Tracking ID', 'Date', 'Time']]);
+    sheet.getRange('A1:D1').setFontWeight('bold');
+    sheet.getRange('A1:D1').setBackground('#4a90d9');
+    sheet.getRange('A1:D1').setFontColor('white');
+    sheet.setColumnWidths(1, 4, [200, 250, 120, 120]);
+    Logger.log('Created new sheet: ' + sheetName);
+  }
+
+  // Prepare rows to append with date and time
+  var now = new Date();
+  var dateForRows = now;
+  if (useYesterdayDate) {
+    dateForRows = new Date(now);
+    dateForRows.setDate(dateForRows.getDate() - 1);
+  }
+  var dateString = Utilities.formatDate(dateForRows, Session.getScriptTimeZone(), "yyyy-MM-dd");
+  var timeString = Utilities.formatDate(now, Session.getScriptTimeZone(), "HH:mm:ss");
+
+  var rowsToAppend = [];
+  for (var i = 0; i < pairs.length; i++) {
+    var sku = String(pairs[i].sku || '').trim();
+    var tracking = String(pairs[i].tracking || '').trim();
+    if (sku && tracking) {
+      rowsToAppend.push([sku, tracking, dateString, timeString]);
+    }
+  }
+
+  if (rowsToAppend.length === 0) {
+    return { success: false, message: 'No valid SKU+Tracking pairs provided' };
+  }
+
+  // One read covers both the expiry check (column C) and the duplicate check
+  // (column B), instead of two separate getRange() round trips.
+  var lastRow = sheet.getLastRow();
+  var dataRowCount = lastRow > 1 ? lastRow - 1 : 0;
+  var existingTrackingIds = {};
+  var cutoffMs = now.getTime() - (5 * 24 * 60 * 60 * 1000);
+  var deleteRuns = [];
+  var keptRowCount = dataRowCount;
+
+  if (dataRowCount > 0) {
+    var block = sheet.getRange(2, 1, dataRowCount, 4).getValues();
+
+    for (var b = 0; b < block.length; b++) {
+      var sheetRow = b + 2;
+      var tracking = String(block[b][1] === null || block[b][1] === undefined ? '' : block[b][1]).trim();
+      if (tracking) existingTrackingIds[tracking] = true;
+
+      var rowMs = cellDateToMs(block[b][2]);
+      if (rowMs !== null && rowMs < cutoffMs) {
+        // Extend the current run when this row is directly below the last one.
+        var lastRun = deleteRuns.length - 1;
+        if (lastRun >= 0 && deleteRuns[lastRun].end === sheetRow - 1) {
+          deleteRuns[lastRun].end = sheetRow;
+        } else {
+          deleteRuns.push({ start: sheetRow, end: sheetRow });
+        }
+        keptRowCount--;
+      }
+    }
+
+    // Remove each contiguous run in a single call. Rows are appended
+    // chronologically, so expired rows are normally one run at the top and
+    // this collapses to exactly one deleteRows() call.
+    for (var d = deleteRuns.length - 1; d >= 0; d--) {
+      var run = deleteRuns[d];
+      sheet.deleteRows(run.start, run.end - run.start + 1);
+    }
+    if (deleteRuns.length > 0) {
+      var deletedCount = dataRowCount - keptRowCount;
+      Logger.log('Deleted ' + deletedCount + ' row(s) older than 5 days from ' + sheetName + ' in ' + deleteRuns.length + ' batch(es)');
+    }
+  }
+
+  // Filter out duplicates (both against kept rows and within this batch)
+  var uniqueRows = [];
+  var duplicateCount = 0;
+  for (var j = 0; j < rowsToAppend.length; j++) {
+    var trackingId = String(rowsToAppend[j][1]).trim();
+    if (!existingTrackingIds[trackingId]) {
+      uniqueRows.push(rowsToAppend[j]);
+      existingTrackingIds[trackingId] = true; // Prevent in-batch duplicates too
+    } else {
+      duplicateCount++;
+    }
+  }
+
+  if (uniqueRows.length === 0) {
+    if (deleteRuns.length > 0 && !deferFlush) SpreadsheetApp.flush();
+    return {
+      success: true,
+      message: 'All ' + duplicateCount + ' tracking ID(s) already exist in the sheet',
+      rowsAdded: 0,
+      duplicatesSkipped: duplicateCount
+    };
+  }
+
+  // Append only unique rows directly below the surviving data. Header sits on
+  // row 1 and only non-expired rows remain, so the offset is known without
+  // another getLastDataRow() scan.
+  var startRow = keptRowCount + 2;
+  sheet.getRange(startRow, 1, uniqueRows.length, 4).setValues(uniqueRows);
+
+  if (!deferFlush) SpreadsheetApp.flush();
+
+  Logger.log('Appended ' + uniqueRows.length + ' unique row(s) to ' + sheetName + ', skipped ' + duplicateCount + ' duplicate(s)');
+
+  return {
+    success: true,
+    message: 'SKU+Tracking pairs appended successfully',
+    rowsAdded: uniqueRows.length,
+    duplicatesSkipped: duplicateCount
+  };
 }

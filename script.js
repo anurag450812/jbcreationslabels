@@ -712,6 +712,9 @@ let returnExtractorUploadedFiles = [];
 // FBF Order to Sheets state
 let fbfOrdersUploadedFiles = [];
 let fbfOrdersDragDepth = 0;
+let fbfFileTextCache = new Map();
+let fbfProcessStartedAt = 0;
+let fbfOrdersInFlight = false;
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -2058,7 +2061,7 @@ function setupEventListeners() {
     }
 
     if (fbfSendToParchiBtn) {
-        fbfSendToParchiBtn.addEventListener('click', sendFbfSkuToDailyParchi);
+        fbfSendToParchiBtn.addEventListener('click', () => sendFbfSkuToDailyParchi(false));
     }
 
     // Label finder
@@ -8374,6 +8377,7 @@ function handleFbfOrdersFileSelect(e) {
 function handleFbfOrdersFiles(files) {
     const existingFileNames = new Set(fbfOrdersUploadedFiles.map(f => f.name));
     const newFiles = files.filter(f => !existingFileNames.has(f.name));
+    clearFbfFileTextCache();
     fbfOrdersUploadedFiles = [...fbfOrdersUploadedFiles, ...newFiles];
 
     if (fbfOrdersUploadedFiles.length > 0) {
@@ -8394,6 +8398,7 @@ function displayFbfOrdersFilesInfo() {
 
 function clearFbfOrdersFiles() {
     fbfOrdersUploadedFiles = [];
+    clearFbfFileTextCache();
     fbfOrdersFileInput.value = '';
     fbfOrdersFilesInfo.style.display = 'none';
     fbfOrdersResultsSection.style.display = 'none';
@@ -8496,49 +8501,60 @@ function setFbfOrdersProgress(percent, message) {
 async function sendFbfOrdersToSheets() {
     if (fbfOrdersUploadedFiles.length === 0) return;
 
+    // Guard against double-clicks / repeat submissions writing duplicate rows.
+    if (fbfOrdersInFlight) {
+        alert('⚠️ Still processing the previous batch. Please wait for it to finish.');
+        return;
+    }
+
     if (!GOOGLE_SHEETS_CONFIG.webAppUrl) {
         alert('⚠️ Google Sheets is not configured. Please configure it first.');
         return;
     }
 
+    fbfOrdersInFlight = true;
+
     if (fbfOrdersResultsSection) {
         fbfOrdersResultsSection.style.display = 'none';
     }
+    if (fbfOrdersProgressFill) fbfOrdersProgressFill.style.backgroundColor = '';
+    if (fbfSendToParchiStatus) fbfSendToParchiStatus.style.display = 'none';
 
-    // Auto-send SKU + Order ID to Daily Parchi first
-    await sendFbfSkuToDailyParchi(true);
-
-    setFbfOrdersProgress(0, 'Reading uploaded CSV file(s)...');
+    fbfProcessStartedAt = performance.now();
+    setFbfOrdersProgress(5, 'Reading uploaded CSV file(s)...');
 
     try {
-        const allSkus = [];
+        // Read + parse every file once and derive both the SKU list and the
+        // SKU+OrderID pairs from the same parse.
+        const { skus, pairs, missingColumns } = await collectFbfCsvData();
 
-        for (let fileIdx = 0; fileIdx < fbfOrdersUploadedFiles.length; fileIdx++) {
-            const file = fbfOrdersUploadedFiles[fileIdx];
-            setFbfOrdersProgress(
-                Math.round((fileIdx / fbfOrdersUploadedFiles.length) * 40),
-                `Parsing ${file.name}...`
-            );
-
-            const text = await file.text();
-            const { skus } = extractSkusFromFbfCsv(text);
-            allSkus.push(...skus);
-        }
-
-        if (allSkus.length === 0) {
+        if (skus.length === 0) {
             throw new Error('No SKUs found. Make sure the CSV contains a column named "SKU" with values.');
         }
 
-        setFbfOrdersProgress(50, `Found ${allSkus.length} SKU(s). Appending to Google Sheets...`);
+        if (missingColumns) {
+            throw new Error(`Column "${missingColumns}" not found. Make sure the CSV has both "SKU" and "Order Id" columns.`);
+        }
 
+        if (fbfSendToParchiStatus) {
+            fbfSendToParchiStatus.style.display = 'block';
+            fbfSendToParchiStatus.innerHTML = `<p>Processing ${skus.length} SKU(s) and ${pairs.length} SKU + Order ID pair(s)...</p>`;
+        }
+
+        setFbfOrdersProgress(50, `Sending ${pairs.length} pair(s) to Google Sheets...`);
+
+        // Single web-app round trip: the backend prunes expired rows, appends
+        // the Daily Parchi pairs, appends the FBF SKUs and syncs consolidated
+        // data — all in one Apps Script execution.
         const response = await fetch(GOOGLE_SHEETS_CONFIG.webAppUrl, {
             method: 'POST',
             headers: {
                 'Content-Type': 'text/plain',
             },
             body: JSON.stringify({
-                action: 'appendFbfOrders',
-                skus: allSkus
+                action: 'processFbfOrders',
+                skus: skus,
+                pairs: pairs.map(p => ({ sku: p.sku, tracking: p.orderId }))
             }),
             redirect: 'follow'
         });
@@ -8549,51 +8565,39 @@ async function sendFbfOrdersToSheets() {
             result = JSON.parse(text);
         } catch (parseError) {
             if (response.ok) {
-                result = { success: true, rowsAdded: allSkus.length };
+                result = { success: true, orders: { rowsAdded: skus.length }, sync: { rowsCopied: 0 } };
             } else {
-                throw new Error('Failed to append orders: ' + response.status);
+                throw new Error('Failed to process FBF orders: ' + response.status);
             }
+        }
+
+        // Fall back to the legacy three-request path when the deployed Apps
+        // Script has not been updated with the combined action yet.
+        if (!result.success && /Unknown action/i.test(result.message || '')) {
+            console.warn('Combined processFbfOrders action unavailable — falling back to legacy requests.');
+            result = await processFbfOrdersLegacy(skus, pairs);
         }
 
         if (!result.success) {
             throw new Error(result.message || 'Unknown error');
         }
 
-        setFbfOrdersProgress(70, `Appended ${result.rowsAdded} row(s). Copying consolidated data to Last 30 Days...`);
+        const rowsAdded = (result.orders && result.orders.rowsAdded) || 0;
+        const rowsCopied = (result.sync && result.sync.rowsCopied) || 0;
 
-        const syncResponse = await fetch(GOOGLE_SHEETS_CONFIG.webAppUrl, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'text/plain',
-            },
-            body: JSON.stringify({
-                action: 'syncConsolidatedToLast30Days'
-            }),
-            redirect: 'follow'
-        });
-
-        let syncResult;
-        try {
-            const text = await syncResponse.text();
-            syncResult = JSON.parse(text);
-        } catch (parseError) {
-            if (syncResponse.ok) {
-                syncResult = { success: true, rowsCopied: 0 };
-            } else {
-                throw new Error('Failed to sync consolidated data: ' + syncResponse.status);
-            }
+        if (result.parchi) {
+            const parchiMsg = result.parchi.rowsAdded > 0
+                ? `✅ ${result.parchi.rowsAdded} new row(s) appended to "Daily Parchi Sku Prints".${result.parchi.duplicatesSkipped > 0 ? ` (${result.parchi.duplicatesSkipped} duplicate Order ID(s) skipped)` : ''}`
+                : (result.parchi.success ? `✅ No new rows for "Daily Parchi Sku Prints" — all Order IDs already present.` : `⚠️ Daily Parchi: ${result.parchi.message}`);
+            if (fbfSendToParchiStatus) fbfSendToParchiStatus.innerHTML = `<p>${parchiMsg}</p>`;
         }
 
-        if (!syncResult.success) {
-            throw new Error(syncResult.message || 'Unknown error');
-        }
+        setFbfOrdersProgress(100, `Done in ${((performance.now() - fbfProcessStartedAt) / 1000).toFixed(1)}s! ${rowsAdded} row(s) appended and ${rowsCopied} row(s) copied to Last 30 Days.`);
 
-        setFbfOrdersProgress(100, `Done! ${result.rowsAdded} row(s) appended and ${syncResult.rowsCopied} row(s) copied to Last 30 Days.`);
-
-        if (fbfOrdersTotalSkus) fbfOrdersTotalSkus.textContent = allSkus.length;
-        if (fbfOrdersRowsAdded) fbfOrdersRowsAdded.textContent = result.rowsAdded;
+        if (fbfOrdersTotalSkus) fbfOrdersTotalSkus.textContent = skus.length;
+        if (fbfOrdersRowsAdded) fbfOrdersRowsAdded.textContent = rowsAdded;
         if (fbfOrdersDestSheet) fbfOrdersDestSheet.textContent = 'Orders From Stock yesterday';
-        if (fbfOrdersRowsCopied) fbfOrdersRowsCopied.textContent = syncResult.rowsCopied;
+        if (fbfOrdersRowsCopied) fbfOrdersRowsCopied.textContent = rowsCopied;
         if (fbfOrdersResultsSection) fbfOrdersResultsSection.style.display = 'block';
 
         setTimeout(() => {
@@ -8608,10 +8612,100 @@ async function sendFbfOrdersToSheets() {
             fbfOrdersProgressFill.style.backgroundColor = '#ef4444';
         }
         alert(`Error: ${error.message}`);
+    } finally {
+        fbfProcessStartedAt = 0;
+        fbfOrdersInFlight = false;
     }
 }
 
-async function sendFbfSkuToDailyParchi(automatic = false) {
+/**
+ * Reads every uploaded CSV once and returns both the flat SKU list and the
+ * deduplicated, SKU-sorted SKU+OrderID pairs.
+ */
+async function collectFbfCsvData() {
+    const skus = [];
+    const pairs = [];
+    const seenPairs = new Set();
+    let missingColumns = null;
+
+    const texts = await Promise.all(fbfOrdersUploadedFiles.map(file => readFbfFileText(file)));
+
+    for (const text of texts) {
+        const { skus: fileSkus } = extractSkusFromFbfCsv(text);
+        for (const sku of fileSkus) skus.push(sku);
+
+        const extracted = extractFbfSkuOrderIdPairs(text);
+        if (extracted.missingColumns) {
+            missingColumns = missingColumns || extracted.missingColumns;
+            continue;
+        }
+        for (const pair of extracted.pairs) {
+            const key = `${pair.sku}::${pair.orderId}`;
+            if (!seenPairs.has(key)) {
+                seenPairs.add(key);
+                pairs.push(pair);
+            }
+        }
+    }
+
+    // Sort alphabetically by SKU
+    pairs.sort((a, b) => a.sku.localeCompare(b.sku, undefined, { sensitivity: 'base' }));
+
+    return { skus, pairs, missingColumns };
+}
+
+/**
+ * Per-run text cache so repeated flows (manual button + automatic run) never
+ * re-read the same File object. Returns a Promise<string> which is safe to
+ * await any number of times.
+ */
+function readFbfFileText(file) {
+    if (!fbfFileTextCache) fbfFileTextCache = new Map();
+    if (!fbfFileTextCache.has(file)) {
+        fbfFileTextCache.set(file, file.text());
+    }
+    return fbfFileTextCache.get(file);
+}
+
+function clearFbfFileTextCache() {
+    if (fbfFileTextCache) fbfFileTextCache.clear();
+}
+
+/**
+ * Legacy three-request pipeline, used only when the deployed Apps Script does
+ * not yet understand the combined "processFbfOrders" action.
+ */
+async function processFbfOrdersLegacy(skus, pairs) {
+    const parchi = await sendFbfSkuToDailyParchi(true, { pairs });
+    if (!parchi.success) return parchi;
+
+    const orders = await postToSheets({ action: 'appendFbfOrders', skus: skus });
+    if (!orders.success) return orders;
+
+    const sync = await postToSheets({ action: 'syncConsolidatedToLast30Days' });
+    if (!sync.success) return sync;
+
+    return { success: true, parchi, orders, sync };
+}
+
+async function postToSheets(payload) {
+    const response = await fetch(GOOGLE_SHEETS_CONFIG.webAppUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify(payload),
+        redirect: 'follow'
+    });
+
+    try {
+        const text = await response.text();
+        return JSON.parse(text);
+    } catch (parseError) {
+        if (response.ok) return { success: true };
+        return { success: false, message: 'Request failed: ' + response.status };
+    }
+}
+
+async function sendFbfSkuToDailyParchi(automatic = false, precomputed = null) {
     if (fbfOrdersUploadedFiles.length === 0) {
         if (!automatic) alert('⚠️ No CSV files uploaded. Please upload FBF order CSV files first.');
         return false;
@@ -8632,30 +8726,20 @@ async function sendFbfSkuToDailyParchi(automatic = false) {
     }
 
     try {
-        const allPairs = [];
-        const seenPairs = new Set();
-
-        for (const file of fbfOrdersUploadedFiles) {
-            const text = await file.text();
-            const { pairs, missingColumns } = extractFbfSkuOrderIdPairs(text);
-            if (missingColumns) {
-                throw new Error(`Column "${missingColumns}" not found in ${file.name}. Make sure the CSV has both "SKU" and "Order Id" columns.`);
+        let allPairs;
+        if (precomputed && Array.isArray(precomputed.pairs)) {
+            allPairs = precomputed.pairs;
+        } else {
+            const collected = await collectFbfCsvData();
+            if (collected.missingColumns) {
+                throw new Error(`Column "${collected.missingColumns}" not found. Make sure the CSV has both "SKU" and "Order Id" columns.`);
             }
-            for (const pair of pairs) {
-                const key = `${pair.sku}::${pair.orderId}`;
-                if (!seenPairs.has(key)) {
-                    seenPairs.add(key);
-                    allPairs.push(pair);
-                }
-            }
+            allPairs = collected.pairs;
         }
 
         if (allPairs.length === 0) {
             throw new Error('No SKU + Order ID pairs found in the uploaded CSV files.');
         }
-
-        // Sort alphabetically by SKU
-        allPairs.sort((a, b) => a.sku.localeCompare(b.sku, undefined, { sensitivity: 'base' }));
 
         if (fbfSendToParchiStatus) {
             fbfSendToParchiStatus.innerHTML = `<p>Found ${allPairs.length} SKU + Order ID pair(s). Confirm to send to Daily Parchi.</p>`;
@@ -8684,28 +8768,11 @@ async function sendFbfSkuToDailyParchi(automatic = false) {
 
         if (fbfSendToParchiStatus) fbfSendToParchiStatus.innerHTML = `<p>Sending ${allPairs.length} pair(s) to Google Sheets...</p>`;
 
-        const response = await fetch(GOOGLE_SHEETS_CONFIG.webAppUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'text/plain' },
-            body: JSON.stringify({
-                action: 'appendDailyParchiSkuPrints',
-                pairs: allPairs.map(p => ({ sku: p.sku, tracking: p.orderId })),
-                useYesterdayDate: true
-            }),
-            redirect: 'follow'
+        const result = await postToSheets({
+            action: 'appendDailyParchiSkuPrints',
+            pairs: allPairs.map(p => ({ sku: p.sku, tracking: p.orderId })),
+            useYesterdayDate: true
         });
-
-        let result;
-        try {
-            const text = await response.text();
-            result = JSON.parse(text);
-        } catch (parseError) {
-            if (response.ok) {
-                result = { success: true, rowsAdded: allPairs.length, duplicatesSkipped: 0 };
-            } else {
-                throw new Error('Failed to send data: ' + response.status);
-            }
-        }
 
         if (!result.success) {
             throw new Error(result.message || 'Unknown error');
@@ -8715,12 +8782,12 @@ async function sendFbfSkuToDailyParchi(automatic = false) {
             fbfSendToParchiStatus.innerHTML = `<p>✅ Done! ${result.rowsAdded} new row(s) appended to "Daily Parchi Sku Prints".${result.duplicatesSkipped > 0 ? ` (${result.duplicatesSkipped} duplicate Order ID(s) skipped)` : ''}</p>`;
         }
         if (!automatic) setTimeout(() => { if (fbfSendToParchiStatus) fbfSendToParchiStatus.style.display = 'none'; }, 4000);
-        return true;
+        return result;
 
     } catch (error) {
         console.error('Error sending FBF SKU to Daily Parchi:', error);
         if (fbfSendToParchiStatus) fbfSendToParchiStatus.innerHTML = `<p>❌ Error: ${error.message}</p>`;
-        return false;
+        return { success: false, message: error.message };
     } finally {
         if (!automatic && fbfSendToParchiBtn) {
             fbfSendToParchiBtn.disabled = false;
