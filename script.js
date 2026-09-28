@@ -1046,6 +1046,193 @@ async function saveSkuList() {
 // SKU EXTRACTION FROM LABELS (Daily Parchi)
 // ============================================
 
+// The sorted PDF download is gated on this append. If the append does not finish
+// (success or hard failure) within this budget, the download proceeds anyway.
+const PARCHI_APPEND_DEADLINE_MS = 30000;
+// Backoff before each retry. Total wall clock stays inside PARCHI_APPEND_DEADLINE_MS.
+const PARCHI_APPEND_RETRY_DELAYS_MS = [0, 3000, 8000, 14000];
+// Hard cap for a single POST so a hung Apps Script request cannot stall forever.
+const PARCHI_APPEND_REQUEST_TIMEOUT_MS = 20000;
+// Minimum per-request timeout, so a nearly-exhausted budget still gets one real try.
+const PARCHI_APPEND_MIN_REQUEST_TIMEOUT_MS = 1000;
+const PARCHI_APPEND_EXTRACT_BTN_LABEL = '📤 Extract SKUs to Daily Parchi';
+
+let isSortedPdfDownloadInProgress = false;
+
+function sleep(ms) {
+    return new Promise(resolve => window.setTimeout(resolve, Math.max(0, ms || 0)));
+}
+
+// fetch() with a real abort-based timeout. Apps Script can hang without ever
+// settling, so an AbortController is the only way to bound a single attempt.
+function fetchWithTimeout(url, options, timeoutMs) {
+    if (typeof AbortController === 'undefined' || !(timeoutMs > 0)) {
+        return fetch(url, options);
+    }
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+        try {
+            controller.abort(new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s`));
+        } catch (abortError) {
+            controller.abort();
+        }
+    }, timeoutMs);
+
+    return fetch(url, { ...options, signal: controller.signal })
+        .finally(() => window.clearTimeout(timer));
+}
+
+function normalizeAppendError(error) {
+    if (!error) return new Error('Daily Parchi append did not complete in time.');
+    if (error.name === 'AbortError' || /timed out|abort/i.test(error.message || '')) {
+        return new Error('Daily Parchi request timed out.');
+    }
+    return error instanceof Error ? error : new Error(String(error));
+}
+
+// Single POST to the "Daily Parchi Sku Prints" append action.
+async function postSkuPairsToDailyParchi(pairs, options = {}) {
+    const { useYesterdayDate = false, timeoutMs = 0 } = options;
+
+    const payload = {
+        action: 'appendDailyParchiSkuPrints',
+        pairs
+    };
+    if (useYesterdayDate) payload.useYesterdayDate = true;
+
+    const requestInit = {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify(payload),
+        redirect: 'follow'
+    };
+
+    const response = timeoutMs > 0
+        ? await fetchWithTimeout(GOOGLE_SHEETS_CONFIG.webAppUrl, requestInit, timeoutMs)
+        : await fetch(GOOGLE_SHEETS_CONFIG.webAppUrl, requestInit);
+
+    let result;
+    try {
+        const text = await response.text();
+        result = JSON.parse(text);
+    } catch (parseError) {
+        if (response.ok) {
+            result = { success: true, rowsAdded: pairs.length, duplicatesSkipped: 0 };
+        } else {
+            throw new Error('Failed to send data: ' + response.status);
+        }
+    }
+
+    if (!result.success) {
+        throw new Error(result.message || 'Unknown error');
+    }
+
+    return result;
+}
+
+// Retries the append with backoff but never runs past the budget. The backend
+// de-duplicates by tracking ID, so a retry can never double-append.
+async function sendPairsToDailyParchiWithRetry(pairs, options = {}) {
+    const {
+        useYesterdayDate = false,
+        retryDelaysMs = PARCHI_APPEND_RETRY_DELAYS_MS,
+        timeoutMs = PARCHI_APPEND_DEADLINE_MS,
+        onAttempt = null
+    } = options;
+
+    const startedAt = Date.now();
+    let lastError = null;
+    let attempts = 0;
+
+    for (let index = 0; index < retryDelaysMs.length; index++) {
+        const plannedDelay = retryDelaysMs[index] || 0;
+
+        if (plannedDelay > 0) {
+            const wait = Math.min(plannedDelay, Math.max(0, timeoutMs - (Date.now() - startedAt)));
+            if (wait <= 0) break;
+            await sleep(wait);
+        }
+
+        const remaining = timeoutMs - (Date.now() - startedAt);
+        if (remaining <= 0) break;
+
+        attempts++;
+        if (typeof onAttempt === 'function') {
+            onAttempt({ attempt: attempts, remaining, error: lastError });
+        }
+
+        const attemptTimeout = Math.max(
+            PARCHI_APPEND_MIN_REQUEST_TIMEOUT_MS,
+            Math.min(PARCHI_APPEND_REQUEST_TIMEOUT_MS, remaining)
+        );
+
+        try {
+            const result = await postSkuPairsToDailyParchi(pairs, { useYesterdayDate, timeoutMs: attemptTimeout });
+            return { ok: true, result, attempts, elapsedMs: Date.now() - startedAt };
+        } catch (error) {
+            lastError = normalizeAppendError(error);
+            console.warn(`Daily Parchi append attempt ${attempts} failed:`, lastError);
+            if (Date.now() - startedAt >= timeoutMs) break;
+        }
+    }
+
+    return {
+        ok: false,
+        attempts,
+        error: lastError || new Error('Daily Parchi append did not complete in time.'),
+        elapsedMs: Date.now() - startedAt
+    };
+}
+
+// Scan the sorted label pages once and return unique SKU -> tracking pairs,
+// sorted alphabetically by SKU.
+function collectSkuTrackingPairsFromSortedPages(status) {
+    const skuTrackingPairs = [];
+    const seenPairs = new Set();
+    let scannedPages = 0;
+    let labelPagesScanned = 0;
+
+    for (const page of sortedPages) {
+        scannedPages++;
+        if (status) status.innerHTML = `<p>Scanning page ${scannedPages}/${sortedPages.length}...</p>`;
+
+        // Only process label pages — skip invoice and non-label pages
+        if (!isSorterLabelPage(page)) continue;
+        labelPagesScanned++;
+
+        const pageText = page.text || '';
+        const pageTextUpper = pageText.toUpperCase();
+
+        // Extract tracking IDs from this page
+        const trackingCandidates = extractTrackingCandidates(pageTextUpper);
+        if (trackingCandidates.length === 0) continue;
+
+        const firstTracking = trackingCandidates[0];
+
+        // Match SKUs from this page text
+        for (const sku of SKU_LIST) {
+            const skuLower = sku.toLowerCase();
+            const index = pageText.indexOf(skuLower);
+            if (index !== -1) {
+                const charAfterSku = pageText.charAt(index + skuLower.length);
+                if (charAfterSku !== ',' && !/\d/.test(charAfterSku)) {
+                    const pairKey = `${sku}::${firstTracking}`;
+                    if (!seenPairs.has(pairKey)) {
+                        seenPairs.add(pairKey);
+                        skuTrackingPairs.push({ sku, tracking: firstTracking });
+                    }
+                }
+            }
+        }
+    }
+
+    // Sort pairs alphabetically by SKU
+    skuTrackingPairs.sort((a, b) => a.sku.localeCompare(b.sku, undefined, { sensitivity: 'base' }));
+
+    return { pairs: skuTrackingPairs, scannedPages, labelPagesScanned };
+}
+
 async function extractSkuToDailyParchi(automatic = false) {
     if (!processedPDF || sortedPages.length === 0) {
         if (!automatic) alert('⚠️ No processed labels available. Please process labels first.');
@@ -1067,44 +1254,7 @@ async function extractSkuToDailyParchi(automatic = false) {
     if (status) status.style.display = 'block';
 
     try {
-        const skuTrackingPairs = [];
-        const seenPairs = new Set();
-        let scannedPages = 0;
-        let labelPagesScanned = 0;
-
-        for (const page of sortedPages) {
-            scannedPages++;
-            if (status) status.innerHTML = `<p>Scanning page ${scannedPages}/${sortedPages.length}...</p>`;
-
-            // Only process label pages — skip invoice and non-label pages
-            if (!isSorterLabelPage(page)) continue;
-            labelPagesScanned++;
-
-            const pageText = page.text || '';
-            const pageTextUpper = pageText.toUpperCase();
-
-            // Extract tracking IDs from this page
-            const trackingCandidates = extractTrackingCandidates(pageTextUpper);
-            if (trackingCandidates.length === 0) continue;
-
-            const firstTracking = trackingCandidates[0];
-
-            // Match SKUs from this page text
-            for (const sku of SKU_LIST) {
-                const skuLower = sku.toLowerCase();
-                const index = pageText.indexOf(skuLower);
-                if (index !== -1) {
-                    const charAfterSku = pageText.charAt(index + skuLower.length);
-                    if (charAfterSku !== ',' && !/\d/.test(charAfterSku)) {
-                        const pairKey = `${sku}::${firstTracking}`;
-                        if (!seenPairs.has(pairKey)) {
-                            seenPairs.add(pairKey);
-                            skuTrackingPairs.push({ sku, tracking: firstTracking });
-                        }
-                    }
-                }
-            }
-        }
+        const { pairs: skuTrackingPairs, labelPagesScanned } = collectSkuTrackingPairsFromSortedPages(status);
 
         if (status) status.innerHTML = `<p>Scanned ${labelPagesScanned} label page(s) of ${sortedPages.length} total.</p>`;
 
@@ -1112,13 +1262,10 @@ async function extractSkuToDailyParchi(automatic = false) {
             if (status) status.innerHTML += '<p>⚠️ No SKU matches found in the processed labels.</p>';
             if (!automatic && btn) {
                 btn.disabled = false;
-                btn.textContent = '📤 Extract SKUs to Daily Parchi';
+                btn.textContent = PARCHI_APPEND_EXTRACT_BTN_LABEL;
             }
             return false;
         }
-
-        // Sort pairs alphabetically by SKU
-        skuTrackingPairs.sort((a, b) => a.sku.localeCompare(b.sku, undefined, { sensitivity: 'base' }));
 
         // Show confirmation dialog (skip in automatic mode)
         if (!automatic) {
@@ -1134,7 +1281,7 @@ async function extractSkuToDailyParchi(automatic = false) {
                 if (status) status.innerHTML = '<p>Cancelled by user.</p>';
                 if (btn) {
                     btn.disabled = false;
-                    btn.textContent = '📤 Extract SKUs to Daily Parchi';
+                    btn.textContent = PARCHI_APPEND_EXTRACT_BTN_LABEL;
                 }
                 return false;
             }
@@ -1142,32 +1289,18 @@ async function extractSkuToDailyParchi(automatic = false) {
 
         if (status) status.innerHTML = `<p>Sending ${skuTrackingPairs.length} pair(s) to Google Sheets...</p>`;
 
-        const response = await fetch(GOOGLE_SHEETS_CONFIG.webAppUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'text/plain' },
-            body: JSON.stringify({
-                action: 'appendDailyParchiSkuPrints',
-                pairs: skuTrackingPairs
-            }),
-            redirect: 'follow'
+        const outcome = await sendPairsToDailyParchiWithRetry(skuTrackingPairs, {
+            onAttempt: ({ attempt, error }) => {
+                if (!status) return;
+                if (attempt > 1) {
+                    status.innerHTML = `<p>Attempt ${attempt}: ${error ? error.message : 'retrying'}…</p>`;
+                }
+            }
         });
 
-        let result;
-        try {
-            const text = await response.text();
-            result = JSON.parse(text);
-        } catch (parseError) {
-            if (response.ok) {
-                result = { success: true, rowsAdded: skuTrackingPairs.length, duplicatesSkipped: 0 };
-            } else {
-                throw new Error('Failed to send data: ' + response.status);
-            }
-        }
+        if (!outcome.ok) throw outcome.error;
 
-        if (!result.success) {
-            throw new Error(result.message || 'Unknown error');
-        }
-
+        const result = outcome.result;
         if (status) status.innerHTML = `<p>✅ Done! ${result.rowsAdded} new row(s) appended to "Daily Parchi Sku Prints".${result.duplicatesSkipped > 0 ? ` (${result.duplicatesSkipped} duplicate tracking ID(s) skipped)` : ''}</p>`;
         if (!automatic) setTimeout(() => { if (status) status.style.display = 'none'; }, 4000);
         return true;
@@ -1179,9 +1312,91 @@ async function extractSkuToDailyParchi(automatic = false) {
     } finally {
         if (!automatic && btn) {
             btn.disabled = false;
-            btn.textContent = '📤 Extract SKUs to Daily Parchi';
+            btn.textContent = PARCHI_APPEND_EXTRACT_BTN_LABEL;
         }
     }
+}
+
+// Runs as the pre-download gate: appends the sorted SKUs to
+// "Daily Parchi Sku Prints". Never rejects — the caller gets a result object so
+// a failure can never prevent the PDF download.
+async function appendSortedSkusToDailyParchiBeforeDownload() {
+    if (!processedPDF || sortedPages.length === 0) {
+        return { ok: true, skipped: true, rowsAdded: 0 };
+    }
+
+    if (!GOOGLE_SHEETS_CONFIG.webAppUrl) {
+        console.warn('Google Sheets is not configured — skipping Daily Parchi SKU append.');
+        return { ok: true, skipped: true, rowsAdded: 0 };
+    }
+
+    const status = extractSkuStatus;
+    if (status) status.style.display = 'block';
+
+    let collected;
+    try {
+        collected = collectSkuTrackingPairsFromSortedPages(status);
+    } catch (error) {
+        console.error('Failed to scan sorted pages for SKUs:', error);
+        return { ok: false, error: normalizeAppendError(error) };
+    }
+
+    if (collected.pairs.length === 0) {
+        if (status) status.innerHTML = '<p>⚠️ No SKU matches found in the processed labels.</p>';
+        return { ok: true, skipped: true, rowsAdded: 0 };
+    }
+
+    if (status) {
+        status.innerHTML = `<p>Saving ${collected.pairs.length} SKU row(s) to "Daily Parchi Sku Prints" before download…</p>`;
+    }
+
+    const outcome = await sendPairsToDailyParchiWithRetry(collected.pairs, {
+        onAttempt: ({ attempt }) => {
+            if (status) {
+                status.innerHTML = `<p>Saving ${collected.pairs.length} SKU row(s) to "Daily Parchi Sku Prints"… (attempt ${attempt})</p>`;
+            }
+        }
+    });
+
+    if (outcome.ok) {
+        const result = outcome.result;
+        if (status) {
+            status.innerHTML = `<p>✅ Done! ${result.rowsAdded} new row(s) appended to "Daily Parchi Sku Prints"${result.duplicatesSkipped > 0 ? ` (${result.duplicatesSkipped} duplicate tracking ID(s) skipped)` : ''}</p>`;
+        }
+    } else if (status) {
+        status.innerHTML = `<p>⚠️ SKU rows were not saved (${outcome.error.message}). The PDF is downloading anyway — use "Extract SKUs to Daily Parchi" to retry.</p>`;
+    }
+
+    return outcome;
+}
+
+// Waits for the SKU append to finish, but never longer than the 30s budget.
+// A hung promise cannot stall the download because the race always settles.
+async function waitForDailyParchiAppendBeforeDownload(timeoutMs = PARCHI_APPEND_DEADLINE_MS) {
+    let timer = null;
+
+    const appendTask = appendSortedSkusToDailyParchiBeforeDownload()
+        .catch(error => ({ ok: false, error: normalizeAppendError(error) }));
+
+    const timeoutTask = new Promise(resolve => {
+        timer = window.setTimeout(() => {
+            resolve({
+                ok: false,
+                timedOut: true,
+                attempts: 0,
+                error: new Error(`Daily Parchi SKU append did not finish within ${Math.round(timeoutMs / 1000)}s.`)
+            });
+        }, timeoutMs);
+    });
+
+    const outcome = await Promise.race([appendTask, timeoutTask]);
+    window.clearTimeout(timer);
+
+    if (outcome.timedOut) {
+        console.warn(outcome.error.message, '— proceeding with the PDF download.');
+    }
+
+    return outcome;
 }
 
 // Load app configuration from Google Sheets
@@ -1850,7 +2065,8 @@ function setupEventListeners() {
 
     // Extract SKU to Daily Parchi button
     if (extractSkuToParchiBtn) {
-        extractSkuToParchiBtn.addEventListener('click', extractSkuToDailyParchi);
+        // Wrap in an arrow function so the click Event is not passed as the `automatic` flag
+        extractSkuToParchiBtn.addEventListener('click', () => { void extractSkuToDailyParchi(false); });
     }
 
     if (packetParchiGenerateBtn) {
@@ -4293,12 +4509,28 @@ async function deductStockFromGoogleSheets(labelCounts) {
 async function downloadSortedPDF() {
     if (!processedPDF) return;
 
+    if (isSortedPdfDownloadInProgress) {
+        console.log('Sorted PDF download already in progress — ignoring duplicate click.');
+        return;
+    }
+
+    isSortedPdfDownloadInProgress = true;
+    const originalBtnLabel = downloadBtn ? downloadBtn.textContent : '';
+    if (downloadBtn) {
+        downloadBtn.disabled = true;
+        downloadBtn.textContent = '⏳ Saving SKUs to Daily Parchi…';
+    }
+
     try {
-        // Fire-and-forget: send SKUs to Daily Parchi without blocking the download
-        if (sortedPages.length > 0 && GOOGLE_SHEETS_CONFIG.webAppUrl) {
-            extractSkuToDailyParchi(true).catch(err => {
-                console.warn('Daily Parchi send failed (non-blocking):', err);
-            });
+        // Append the SKU rows to "Daily Parchi Sku Prints" BEFORE downloading.
+        // Success -> download immediately. Failure or stall -> download anyway
+        // once the 30s budget expires, so the PDF is never held hostage.
+        const parchiOutcome = await waitForDailyParchiAppendBeforeDownload();
+
+        if (downloadBtn) {
+            downloadBtn.textContent = parchiOutcome.ok
+                ? '⬇️ Downloading Sorted PDF…'
+                : '⬇️ Downloading PDF (SKUs not saved)…';
         }
 
         const pdfBytes = await processedPDF.save();
@@ -4312,10 +4544,20 @@ async function downloadSortedPDF() {
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
-        
+
+        if (!parchiOutcome.ok) {
+            console.warn('Sorted PDF downloaded, but the Daily Parchi SKU append did not complete:', parchiOutcome.error);
+        }
+
     } catch (error) {
         console.error('Error downloading PDF:', error);
         alert('Error downloading PDF. Please try again.');
+    } finally {
+        isSortedPdfDownloadInProgress = false;
+        if (downloadBtn) {
+            downloadBtn.disabled = false;
+            downloadBtn.textContent = originalBtnLabel || '⬇️ Download Sorted PDF';
+        }
     }
 }
 
