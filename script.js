@@ -321,6 +321,28 @@ let finderPrintUrlToRevoke = null;
 let finderSelectedCourier = '';
 let hasAppStarted = false;
 
+// Cancelled Items state (kept separate from Label Finder state)
+const CANCELLED_ITEMS_SUB_ORDER_HEADERS = ['suborderno', 'subordernumber', 'subordernum', 'suborderid'];
+const CANCELLED_ITEMS_REASON_HEADERS = ['reasonforcreditentry'];
+const CANCELLED_ITEMS_AWB_HEADERS = [
+    'awb',
+    'awbno',
+    'awbnumber',
+    'awbcode',
+    'tracking',
+    'trackingid',
+    'trackingno',
+    'trackingnumber',
+    'shipmentid',
+    'waybill',
+    'waybillno'
+];
+let cancelledItemsUploadedFile = null;
+let cancelledItemsInFlight = false;
+let cancelledItemsPageTextCache = new Map();
+let cancelledItemsRenderedMatches = [];
+let cancelledItemsPrintUrlToRevoke = null;
+
 function isDesktopApp() {
     return typeof window.desktopAPI !== 'undefined';
 }
@@ -652,6 +674,22 @@ const finderHistoryList = document.getElementById('finderHistoryList');
 const finderResultsList = document.getElementById('finderResultsList');
 const finderSelectedMeta = document.getElementById('finderSelectedMeta');
 const finderLabelCanvas = document.getElementById('finderLabelCanvas');
+
+// Cancelled Items DOM Elements
+const cancelledItemsUploadArea = document.getElementById('cancelledItemsUploadArea');
+const cancelledItemsFileInput = document.getElementById('cancelledItemsFileInput');
+const cancelledItemsClearBtn = document.getElementById('cancelledItemsClearBtn');
+const cancelledItemsProcessBtn = document.getElementById('cancelledItemsProcessBtn');
+const cancelledItemsFileInfo = document.getElementById('cancelledItemsFileInfo');
+const cancelledItemsStatusSection = document.getElementById('cancelledItemsStatusSection');
+const cancelledItemsProgressFill = document.getElementById('cancelledItemsProgressFill');
+const cancelledItemsStatusText = document.getElementById('cancelledItemsStatusText');
+const cancelledItemsResultsSection = document.getElementById('cancelledItemsResultsSection');
+const cancelledItemsCancelledCount = document.getElementById('cancelledItemsCancelledCount');
+const cancelledItemsMatchCount = document.getElementById('cancelledItemsMatchCount');
+const cancelledItemsCourierCount = document.getElementById('cancelledItemsCourierCount');
+const cancelledItemsResultsList = document.getElementById('cancelledItemsResultsList');
+
 const packetParchiMakerInput = document.getElementById('packetParchiMakerName');
 const packetParchiCheckerInput = document.getElementById('packetParchiCheckerName');
 const packetParchiPageCountInput = document.getElementById('packetParchiPageCount');
@@ -881,7 +919,7 @@ function initializeApp() {
     
     // Restore active tab from localStorage
     const savedTab = isDesktopApp() ? 'sku-automation' : localStorage.getItem('activeTab');
-    if (savedTab && (savedTab === 'sorting' || savedTab === 'counter' || savedTab === 'cropping' || savedTab === 'finder' || savedTab === 'packet-parchi' || savedTab === 'sku-automation' || savedTab === 'return-extractor' || savedTab === 'fbf-orders')) {
+    if (savedTab && (savedTab === 'sorting' || savedTab === 'counter' || savedTab === 'cropping' || savedTab === 'finder' || savedTab === 'cancelled-items' || savedTab === 'packet-parchi' || savedTab === 'sku-automation' || savedTab === 'return-extractor' || savedTab === 'fbf-orders')) {
         switchTab(savedTab);
     }
     
@@ -2278,6 +2316,44 @@ function setupEventListeners() {
 
     if (fbfSendToParchiBtn) {
         fbfSendToParchiBtn.addEventListener('click', () => sendFbfSkuToDailyParchi(false));
+    }
+
+    // ===============================
+    // CANCELLED ITEMS EVENT LISTENERS
+    // ===============================
+
+    if (cancelledItemsFileInput) {
+        cancelledItemsFileInput.addEventListener('change', handleCancelledItemsFileSelect);
+    }
+
+    if (cancelledItemsUploadArea) {
+        cancelledItemsUploadArea.addEventListener('click', () => cancelledItemsFileInput.click());
+
+        cancelledItemsUploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            cancelledItemsUploadArea.classList.add('dragover');
+        });
+
+        cancelledItemsUploadArea.addEventListener('dragleave', () => {
+            cancelledItemsUploadArea.classList.remove('dragover');
+        });
+
+        cancelledItemsUploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            cancelledItemsUploadArea.classList.remove('dragover');
+            const files = getDroppedFiles(e.dataTransfer, isSupportedOrderFile);
+            if (files.length > 0) {
+                handleCancelledItemsFiles(files);
+            }
+        });
+    }
+
+    if (cancelledItemsClearBtn) {
+        cancelledItemsClearBtn.addEventListener('click', clearCancelledItemsFile);
+    }
+
+    if (cancelledItemsProcessBtn) {
+        cancelledItemsProcessBtn.addEventListener('click', processCancelledItems);
     }
 
     // Label finder
@@ -5769,6 +5845,814 @@ window.requestFinderHistoryDelete = function(entryId) {
     pendingFinderDeleteEntryId = entryId;
     showPasswordModal('finderDelete');
 };
+
+// ============================================
+// CANCELLED ITEMS (separate from Label Finder)
+// ============================================
+
+function handleCancelledItemsFileSelect(event) {
+    const files = Array.from(event?.target?.files || []).filter(isSupportedOrderFile);
+    if (files.length > 0) {
+        handleCancelledItemsFiles(files);
+    }
+}
+
+function handleCancelledItemsFiles(files) {
+    if (cancelledItemsInFlight) return;
+
+    const file = Array.from(files || []).find(isSupportedOrderFile);
+    if (!file) {
+        alert('Please upload a Meesho Excel file (.xlsx, .xls) or CSV.');
+        return;
+    }
+
+    cancelledItemsUploadedFile = file;
+    cancelledItemsRenderedMatches = [];
+
+    if (cancelledItemsFileInput) {
+        cancelledItemsFileInput.value = '';
+    }
+    if (cancelledItemsFileInfo) {
+        cancelledItemsFileInfo.textContent = `Selected: ${file.name}`;
+        cancelledItemsFileInfo.className = 'finder-upload-status-text';
+    }
+    if (cancelledItemsProcessBtn) {
+        cancelledItemsProcessBtn.disabled = false;
+    }
+    if (cancelledItemsClearBtn) {
+        cancelledItemsClearBtn.style.display = 'inline-flex';
+    }
+    if (cancelledItemsResultsSection) {
+        cancelledItemsResultsSection.style.display = 'none';
+    }
+    if (cancelledItemsStatusSection) {
+        cancelledItemsStatusSection.style.display = 'none';
+    }
+
+    updateUploadAreaCopy(cancelledItemsUploadArea, 'Meesho file ready', file.name);
+}
+
+function clearCancelledItemsFile() {
+    cancelledItemsUploadedFile = null;
+    cancelledItemsRenderedMatches = [];
+
+    if (cancelledItemsFileInput) {
+        cancelledItemsFileInput.value = '';
+    }
+    if (cancelledItemsFileInfo) {
+        cancelledItemsFileInfo.textContent = '';
+        cancelledItemsFileInfo.className = 'finder-upload-status-text';
+    }
+    if (cancelledItemsProcessBtn) {
+        cancelledItemsProcessBtn.disabled = true;
+    }
+    if (cancelledItemsClearBtn) {
+        cancelledItemsClearBtn.style.display = 'none';
+        cancelledItemsClearBtn.disabled = false;
+    }
+    if (cancelledItemsStatusSection) {
+        cancelledItemsStatusSection.style.display = 'none';
+    }
+    if (cancelledItemsResultsSection) {
+        cancelledItemsResultsSection.style.display = 'none';
+    }
+    if (cancelledItemsResultsList) {
+        cancelledItemsResultsList.innerHTML = '';
+    }
+    if (cancelledItemsProgressFill) {
+        cancelledItemsProgressFill.style.width = '0%';
+        cancelledItemsProgressFill.style.backgroundColor = '';
+    }
+
+    updateUploadAreaCopy(
+        cancelledItemsUploadArea,
+        '',
+        'Click to browse (.xlsx, .xls, .csv with "Sub Order No" and "Reason for Credit Entry"; AWB column optional)'
+    );
+}
+
+function setCancelledItemsProgress(percent, message, isError = false) {
+    if (cancelledItemsStatusSection) {
+        cancelledItemsStatusSection.style.display = 'block';
+    }
+    if (cancelledItemsProgressFill) {
+        const safePercent = Math.max(0, Math.min(100, Number(percent) || 0));
+        cancelledItemsProgressFill.style.width = `${safePercent}%`;
+        cancelledItemsProgressFill.style.backgroundColor = isError ? '#ef4444' : '';
+    }
+    if (cancelledItemsStatusText) {
+        cancelledItemsStatusText.textContent = message;
+    }
+}
+
+function escapeCancelledItemsHtml(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function normalizeCancelledItemsHeader(value) {
+    return String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function normalizeCancelledOrderId(value) {
+    if (value === null || value === undefined) return '';
+
+    if (typeof value === 'number' && Number.isFinite(value)) {
+        return Number.isInteger(value) ? value.toFixed(0) : String(value);
+    }
+
+    let text = String(value).trim().replace(/^'+/, '').trim();
+
+    if (/^\d+\.0+$/.test(text)) {
+        text = text.replace(/\.0+$/, '');
+    }
+
+    if (/^[+-]?\d+(?:\.\d+)?e[+-]?\d+$/i.test(text)) {
+        const numericValue = Number(text);
+        if (Number.isFinite(numericValue)) {
+            text = numericValue.toFixed(0);
+        }
+    }
+
+    return text;
+}
+
+function extractCancelledOrdersFromWorkbook(workbook) {
+    const orders = [];
+    const seen = new Set();
+    const sheetsWithHeaders = [];
+    const sheetNames = Array.isArray(workbook?.SheetNames) ? workbook.SheetNames : [];
+
+    for (const sheetName of sheetNames) {
+        const sheet = workbook.Sheets ? workbook.Sheets[sheetName] : null;
+        if (!sheet) continue;
+
+        let rows;
+        try {
+            rows = XLSX.utils.sheet_to_json(sheet, {
+                header: 1,
+                defval: '',
+                raw: true,
+                blankrows: false
+            });
+        } catch (error) {
+            console.warn(`Cancelled items: unable to read sheet "${sheetName}"`, error);
+            continue;
+        }
+
+        if (!Array.isArray(rows) || rows.length === 0) continue;
+
+        let subOrderIndex = -1;
+        let reasonIndex = -1;
+        let awbIndex = -1;
+        let headerRowIndex = -1;
+        const scanLimit = Math.min(rows.length, 30);
+
+        for (let rowIndex = 0; rowIndex < scanLimit; rowIndex++) {
+            const row = rows[rowIndex] || [];
+            let nextSubOrderIndex = -1;
+            let nextReasonIndex = -1;
+            let nextAwbIndex = -1;
+
+            row.forEach((cell, cellIndex) => {
+                const header = normalizeCancelledItemsHeader(cell);
+
+                if (nextSubOrderIndex === -1 && CANCELLED_ITEMS_SUB_ORDER_HEADERS.includes(header)) {
+                    nextSubOrderIndex = cellIndex;
+                }
+                if (nextReasonIndex === -1 && CANCELLED_ITEMS_REASON_HEADERS.includes(header)) {
+                    nextReasonIndex = cellIndex;
+                }
+                if (nextAwbIndex === -1 && CANCELLED_ITEMS_AWB_HEADERS.includes(header)) {
+                    nextAwbIndex = cellIndex;
+                }
+            });
+
+            if (nextSubOrderIndex !== -1 && nextReasonIndex !== -1) {
+                subOrderIndex = nextSubOrderIndex;
+                reasonIndex = nextReasonIndex;
+                awbIndex = nextAwbIndex;
+                headerRowIndex = rowIndex;
+                break;
+            }
+        }
+
+        if (headerRowIndex === -1) continue;
+        sheetsWithHeaders.push(sheetName);
+
+        for (let rowIndex = headerRowIndex + 1; rowIndex < rows.length; rowIndex++) {
+            const row = rows[rowIndex] || [];
+            const reason = String(row[reasonIndex] ?? '').trim();
+
+            if (!reason || !reason.toUpperCase().includes('CANCELLED')) continue;
+
+            const orderId = normalizeCancelledOrderId(row[subOrderIndex]);
+            const normalized = normalizeFinderText(orderId);
+            const baseNormalized = normalizeFinderText(String(orderId).replace(/_\d+\s*$/, ''));
+            const awb = awbIndex !== -1 ? normalizeCancelledOrderId(row[awbIndex]) : '';
+            const awbNormalized = normalizeFinderText(awb);
+
+            if (!normalized || seen.has(normalized)) continue;
+
+            seen.add(normalized);
+            orders.push({ orderId, normalized, baseNormalized, awb, awbNormalized });
+        }
+    }
+
+    return {
+        orders,
+        sheetsWithHeaders,
+        hasHeaders: sheetsWithHeaders.length > 0
+    };
+}
+
+async function getCancelledEntryPageTexts(entry) {
+    const cacheKey = `${entry.id}::${entry.createdAt || ''}`;
+    if (cancelledItemsPageTextCache.has(cacheKey)) {
+        return cancelledItemsPageTextCache.get(cacheKey);
+    }
+
+    const pageMap = new Map();
+    const blob = await getFinderEntryBlob(entry.id);
+
+    if (!blob) {
+        cancelledItemsPageTextCache.set(cacheKey, pageMap);
+        return pageMap;
+    }
+
+    const entryTrackings = Array.isArray(entry.trackings) ? entry.trackings : [];
+    const labelPageIndexes = Array.from(new Set(
+        entryTrackings
+            .map(item => item && item.labelPageIndex)
+            .filter(pageIndex => Number.isInteger(pageIndex) && pageIndex >= 0)
+    ));
+    const invoicePageByLabel = new Map();
+
+    entryTrackings.forEach(item => {
+        if (!item) return;
+        if (!Number.isInteger(item.labelPageIndex) || item.labelPageIndex < 0) return;
+        if (!Number.isInteger(item.invoicePageIndex) || item.invoicePageIndex < 0) return;
+        invoicePageByLabel.set(item.labelPageIndex, item.invoicePageIndex);
+    });
+
+    const bytes = await blob.arrayBuffer();
+    const pdfDoc = await pdfjsLib.getDocument({ data: new Uint8Array(bytes) }).promise;
+
+    try {
+        const textCache = new Map();
+        const getPageText = async pageIndex => {
+            if (textCache.has(pageIndex)) return textCache.get(pageIndex);
+            if (pageIndex < 0 || pageIndex >= pdfDoc.numPages) return '';
+
+            const page = await pdfDoc.getPage(pageIndex + 1);
+            const textContent = await page.getTextContent();
+            const text = textContent.items
+                .map(item => (item && item.str) || '')
+                .join(' ');
+
+            textCache.set(pageIndex, text);
+            return text;
+        };
+
+        const pageIndexes = labelPageIndexes.length
+            ? labelPageIndexes
+            : Array.from({ length: pdfDoc.numPages }, (_, index) => index);
+
+        for (const pageIndex of pageIndexes) {
+            if (pageIndex >= pdfDoc.numPages) continue;
+
+            const labelText = await getPageText(pageIndex);
+            const invoicePageIndex = invoicePageByLabel.get(pageIndex);
+            const invoiceText = Number.isInteger(invoicePageIndex) && invoicePageIndex !== pageIndex
+                ? await getPageText(invoicePageIndex)
+                : '';
+            const text = [labelText, invoiceText].filter(Boolean).join(' ');
+
+            pageMap.set(pageIndex, {
+                text,
+                upperText: text.toUpperCase(),
+                normalized: normalizeFinderText(text),
+                tokens: new Set((text.toUpperCase().match(/[A-Z0-9]{4,}/g) || []))
+            });
+        }
+    } finally {
+        if (pdfDoc && typeof pdfDoc.destroy === 'function') {
+            try {
+                await pdfDoc.destroy();
+            } catch (error) {
+                console.warn('Cancelled items: PDF cleanup warning:', error);
+            }
+        }
+    }
+
+    cancelledItemsPageTextCache.set(cacheKey, pageMap);
+    return pageMap;
+}
+
+function getCancelledOrderIdsOnPage(pageInfo, orderMap) {
+    if (!pageInfo || !orderMap.size) return [];
+
+    const found = [];
+    const fullMatched = new Set();
+    const fullMatchedBaseKeys = new Set();
+
+    for (const order of orderMap.values()) {
+        const tokenMatch = pageInfo.tokens.has(order.normalized);
+        const regexMatch = order.boundaryRegex && order.boundaryRegex.test(pageInfo.upperText);
+
+        if (tokenMatch || regexMatch) {
+            found.push(order);
+            fullMatched.add(order.normalized);
+            if (order.baseNormalized) {
+                fullMatchedBaseKeys.add(order.baseNormalized);
+            }
+        }
+    }
+
+    for (const order of orderMap.values()) {
+        if (fullMatched.has(order.normalized)) continue;
+        if (!order.baseRegex || !order.baseNormalized) continue;
+        if (fullMatchedBaseKeys.has(order.baseNormalized)) continue;
+
+        if (order.baseRegex.test(pageInfo.upperText)) {
+            found.push(order);
+        }
+    }
+
+    return found;
+}
+
+function extractCancelledItemAwb(pageText, pageTrackings, orderNormalized) {
+    const candidates = [];
+
+    const addCandidate = (value, score) => {
+        const cleaned = String(value || '').trim().replace(/[),.;:]+$/, '');
+        const normalized = normalizeFinderText(cleaned);
+
+        if (!normalized || normalized.length < 6 || normalized.length > 30) return;
+        if (normalized === orderNormalized) return;
+
+        candidates.push({ value: cleaned, normalized, score });
+    };
+
+    const text = String(pageText || '');
+    const explicitAwbRegexes = [
+        /\bAWB\s*(?:NO|NUMBER|ID|CODE)?\.?\s*[:#\-]?\s*([A-Z0-9][A-Z0-9\-]{5,23})/gi,
+        /\bTRACKING\s*(?:NO|NUMBER|ID|CODE)?\.?\s*[:#\-]?\s*([A-Z0-9][A-Z0-9\-]{5,23})/gi
+    ];
+
+    explicitAwbRegexes.forEach(regex => {
+        for (const match of text.matchAll(regex)) {
+            const explicitCandidate = match[1];
+            const digitCount = (explicitCandidate.match(/\d/g) || []).length;
+
+            if (digitCount < 4) continue;
+            addCandidate(explicitCandidate, 100);
+        }
+    });
+
+    (Array.isArray(pageTrackings) ? pageTrackings : []).forEach(record => {
+        const value = record && record.tracking;
+        const normalized = normalizeFinderText(value);
+        if (!normalized) return;
+
+        let score = 0;
+        if (/[A-Z]/.test(normalized) && /\d/.test(normalized)) score += 25;
+        if (normalized.length >= 10 && normalized.length <= 16) score += 10;
+        if (/^\d{10}$/.test(normalized) && /^[6-9]/.test(normalized)) score -= 15;
+        if (record && record.courierKey && record.courierKey !== 'unknown') score += 5;
+
+        addCandidate(value, score);
+    });
+
+    const byNormalized = new Map();
+
+    candidates.forEach(candidate => {
+        const existing = byNormalized.get(candidate.normalized);
+        if (!existing || candidate.score > existing.score) {
+            byNormalized.set(candidate.normalized, candidate);
+        }
+    });
+
+    const best = Array.from(byNormalized.values())
+        .sort((a, b) => b.score - a.score)[0];
+
+    return best ? best.value : '';
+}
+
+function getCancelledItemCourier(pageText, pageTrackings) {
+    const pageCourierKey = detectFinderCourierKey(pageText);
+
+    if (pageCourierKey !== 'unknown') {
+        return {
+            key: pageCourierKey,
+            label: getFinderCourierLabel(pageCourierKey)
+        };
+    }
+
+    const trackingCourierKey = (Array.isArray(pageTrackings) ? pageTrackings : [])
+        .map(record => String(record?.courierKey || '').toLowerCase())
+        .find(key => key && key !== 'unknown');
+
+    if (trackingCourierKey) {
+        return {
+            key: trackingCourierKey,
+            label: getFinderCourierLabel(trackingCourierKey)
+        };
+    }
+
+    return {
+        key: 'unknown',
+        label: getFinderCourierLabel('unknown')
+    };
+}
+
+async function findCancelledLabelMatches(orders, entries, onProgress) {
+    const orderMap = new Map(orders.map(order => {
+        const boundaryPattern = order.normalized
+            .split('')
+            .join('[^A-Z0-9]*');
+        const baseBoundaryPattern = order.baseNormalized && order.baseNormalized !== order.normalized
+            ? order.baseNormalized.split('').join('[^A-Z0-9]*')
+            : '';
+
+        return [order.normalized, {
+            ...order,
+            boundaryRegex: new RegExp(`(?:^|[^A-Z0-9])${boundaryPattern}(?=$|[^A-Z0-9])`),
+            baseRegex: baseBoundaryPattern
+                ? new RegExp(`(?:^|[^A-Z0-9])${baseBoundaryPattern}(?![^A-Z0-9]*\\d)(?=$|[^A-Z0-9])`)
+                : null
+        }];
+    }));
+    const ordersByAwb = new Map();
+
+    orders.forEach(order => {
+        if (!order.awbNormalized) return;
+        if (!ordersByAwb.has(order.awbNormalized)) {
+            ordersByAwb.set(order.awbNormalized, []);
+        }
+        ordersByAwb.get(order.awbNormalized).push(order);
+    });
+
+    const matches = [];
+    const seen = new Set();
+    const awbMatchedOrders = new Set();
+    const totalEntries = Math.max(entries.length, 1);
+
+    const addMatch = (order, entry, labelPageIndex, pageInfo, pageTrackings, awb) => {
+        const dedupeKey = `${order.normalized}::${entry.id}::${labelPageIndex}`;
+        if (seen.has(dedupeKey)) return;
+        seen.add(dedupeKey);
+
+        const timestampMs = new Date(entry.createdAt).getTime();
+        const pageText = pageInfo?.text || '';
+        const courier = getCancelledItemCourier(pageText, pageTrackings);
+        const invoiceRecord = pageTrackings.find(record => typeof record.invoicePageIndex === 'number');
+        const invoicePageIndex = invoiceRecord ? invoiceRecord.invoicePageIndex : null;
+
+        matches.push({
+            orderId: order.orderId,
+            orderNormalized: order.normalized,
+            entryId: entry.id,
+            fileName: entry.fileName || '',
+            createdAt: entry.createdAt,
+            createdAtDisplay: entry.createdAtDisplay || formatFinderTimestamp(entry.createdAt),
+            timestampMs: Number.isFinite(timestampMs) ? timestampMs : 0,
+            labelPageIndex,
+            invoicePageIndex,
+            courierKey: courier.key,
+            courierLabel: courier.label,
+            awb: awb || extractCancelledItemAwb(pageText, pageTrackings, order.normalized)
+        });
+    };
+
+    const getPageContext = (entry, pageMap, labelPageIndex) => {
+        const pageInfo = pageMap.get(labelPageIndex);
+        const pageTrackings = (Array.isArray(entry.trackings) ? entry.trackings : [])
+            .filter(record => record && record.labelPageIndex === labelPageIndex);
+
+        return { pageInfo, pageTrackings };
+    };
+
+    if (ordersByAwb.size) {
+        for (let entryIndex = 0; entryIndex < entries.length; entryIndex++) {
+            const entry = entries[entryIndex];
+            const entryLabel = entry.fileName || `label batch ${entryIndex + 1}`;
+
+            if (typeof onProgress === 'function') {
+                onProgress(20 + ((entryIndex / totalEntries) * 30), `Matching AWB numbers in ${entryLabel}...`);
+            }
+
+            let pageMap;
+
+            try {
+                pageMap = await getCancelledEntryPageTexts(entry);
+            } catch (error) {
+                console.warn(`Cancelled items: unable to scan "${entryLabel}"`, error);
+                continue;
+            }
+
+            const entryTrackings = Array.isArray(entry.trackings) ? entry.trackings : [];
+
+            entryTrackings.forEach(record => {
+                const trackingNormalized = normalizeFinderText(record?.tracking);
+                if (!trackingNormalized) return;
+
+                const awbOrders = ordersByAwb.get(trackingNormalized);
+                if (!awbOrders || !awbOrders.length) return;
+
+                const labelPageIndex = record.labelPageIndex;
+                if (!Number.isInteger(labelPageIndex) || labelPageIndex < 0) return;
+
+                const { pageInfo, pageTrackings } = getPageContext(entry, pageMap, labelPageIndex);
+
+                awbOrders.forEach(order => {
+                    awbMatchedOrders.add(order.normalized);
+                    addMatch(order, entry, labelPageIndex, pageInfo, pageTrackings, record.tracking);
+                });
+            });
+        }
+    }
+
+    for (let entryIndex = 0; entryIndex < entries.length; entryIndex++) {
+        const entry = entries[entryIndex];
+        const entryLabel = entry.fileName || `label batch ${entryIndex + 1}`;
+
+        if (typeof onProgress === 'function') {
+            onProgress(50 + ((entryIndex / totalEntries) * 40), `Scanning ${entryLabel}...`);
+        }
+
+        let pageMap;
+
+        try {
+            pageMap = await getCancelledEntryPageTexts(entry);
+        } catch (error) {
+            console.warn(`Cancelled items: unable to scan "${entryLabel}"`, error);
+            continue;
+        }
+
+        for (const [labelPageIndex, pageInfo] of pageMap) {
+            const matchedOrders = getCancelledOrderIdsOnPage(pageInfo, orderMap);
+            if (!matchedOrders.length) continue;
+
+            const { pageTrackings } = getPageContext(entry, pageMap, labelPageIndex);
+
+            matchedOrders.forEach(order => {
+                if (awbMatchedOrders.has(order.normalized)) return;
+                addMatch(order, entry, labelPageIndex, pageInfo, pageTrackings);
+            });
+        }
+    }
+
+    matches.sort((a, b) => (b.timestampMs - a.timestampMs)
+        || String(a.fileName).localeCompare(String(b.fileName))
+        || (a.labelPageIndex - b.labelPageIndex));
+
+    return matches;
+}
+
+function renderCancelledItemsResults(matches, cancelledOrderCount) {
+    cancelledItemsRenderedMatches = matches.slice();
+
+    if (cancelledItemsCancelledCount) {
+        cancelledItemsCancelledCount.textContent = cancelledOrderCount;
+    }
+    if (cancelledItemsMatchCount) {
+        cancelledItemsMatchCount.textContent = matches.length;
+    }
+    if (cancelledItemsCourierCount) {
+        cancelledItemsCourierCount.textContent = new Set(
+            matches.map(match => match.courierKey || 'unknown')
+        ).size;
+    }
+
+    if (!cancelledItemsResultsList) {
+        if (cancelledItemsResultsSection) {
+            cancelledItemsResultsSection.style.display = 'block';
+        }
+        return;
+    }
+
+    if (!matches.length) {
+        cancelledItemsResultsList.innerHTML = `
+            <div class="cancelled-item-empty">
+                No matching cancelled labels were found in the uploaded Label Finder batches.
+            </div>
+        `;
+    } else {
+        cancelledItemsResultsList.innerHTML = matches.map((match, index) => `
+            <div class="cancelled-item">
+                <div class="cancelled-item-main">
+                    <div class="cancelled-item-title">
+                        Order: ${escapeCancelledItemsHtml(match.orderId)}
+                        <span class="cancelled-item-status">CANCELLED</span>
+                    </div>
+                    <div class="cancelled-item-details">
+                        <span><strong>AWB:</strong> ${match.awb ? escapeCancelledItemsHtml(match.awb) : 'Not detected'}</span>
+                        <span><strong>Courier:</strong> ${escapeCancelledItemsHtml(match.courierLabel)}</span>
+                        <span><strong>Uploaded:</strong> ${escapeCancelledItemsHtml(match.createdAtDisplay)}</span>
+                        <span><strong>File:</strong> ${escapeCancelledItemsHtml(match.fileName)}</span>
+                    </div>
+                </div>
+                <div class="cancelled-item-actions">
+                    <button class="btn btn-secondary" type="button" data-cancelled-item-open="${index}">Open</button>
+                    <button class="btn btn-secondary" type="button" data-cancelled-item-print="${index}">Print</button>
+                </div>
+            </div>
+        `).join('');
+
+        cancelledItemsResultsList.querySelectorAll('[data-cancelled-item-open]').forEach(button => {
+            button.addEventListener('click', async event => {
+                event.preventDefault();
+                const index = Number(button.getAttribute('data-cancelled-item-open'));
+                const match = cancelledItemsRenderedMatches[index];
+                if (!match) return;
+                await openCancelledItemLabel(match);
+            });
+        });
+
+        cancelledItemsResultsList.querySelectorAll('[data-cancelled-item-print]').forEach(button => {
+            button.addEventListener('click', async event => {
+                event.preventDefault();
+                const index = Number(button.getAttribute('data-cancelled-item-print'));
+                const match = cancelledItemsRenderedMatches[index];
+                if (!match) return;
+                await printCancelledItemLabel(match);
+            });
+        });
+    }
+
+    if (cancelledItemsResultsSection) {
+        cancelledItemsResultsSection.style.display = 'block';
+    }
+}
+
+async function openCancelledItemLabel(match) {
+    if (!match) return;
+
+    await openFinderMatchPdf({
+        entryId: match.entryId,
+        labelPageIndex: match.labelPageIndex,
+        invoicePageIndex: match.invoicePageIndex,
+        tracking: match.orderId
+    });
+}
+
+async function printCancelledItemLabel(match) {
+    if (!match) return;
+
+    try {
+        const sourceBlob = await getFinderEntryBlob(match.entryId);
+        if (!sourceBlob) {
+            throw new Error('Unable to load the selected label PDF.');
+        }
+
+        const { PDFDocument } = PDFLib;
+        const sourceBytes = await sourceBlob.arrayBuffer();
+        const sourceDoc = await PDFDocument.load(sourceBytes);
+        const printDoc = await PDFDocument.create();
+        const pagesToCopy = [match.labelPageIndex];
+
+        if (typeof match.invoicePageIndex === 'number') {
+            pagesToCopy.push(match.invoicePageIndex);
+        }
+
+        const copiedPages = await printDoc.copyPages(sourceDoc, pagesToCopy);
+        copiedPages.forEach(page => printDoc.addPage(page));
+
+        const outputBytes = await printDoc.save();
+        const outputBlob = new Blob([outputBytes], { type: 'application/pdf' });
+        const outputUrl = URL.createObjectURL(outputBlob);
+        const printFrame = getOrCreateFinderPrintFrame();
+
+        if (cancelledItemsPrintUrlToRevoke) {
+            try {
+                URL.revokeObjectURL(cancelledItemsPrintUrlToRevoke);
+            } catch (error) {
+                console.warn('Cancelled items print URL revoke warning:', error);
+            }
+            cancelledItemsPrintUrlToRevoke = null;
+        }
+
+        cancelledItemsPrintUrlToRevoke = outputUrl;
+        printFrame.onload = () => {
+            try {
+                printFrame.contentWindow.focus();
+                printFrame.contentWindow.print();
+            } catch (printError) {
+                console.error('Cancelled items print frame error:', printError);
+                alert(`Print failed: ${printError.message}`);
+            }
+        };
+
+        printFrame.src = outputUrl;
+    } catch (error) {
+        console.error('Cancelled items print failed:', error);
+        alert(`Print failed: ${error.message}`);
+    }
+}
+
+async function processCancelledItems() {
+    if (cancelledItemsInFlight) return;
+
+    if (!cancelledItemsUploadedFile) {
+        alert('Please upload a Meesho Excel file first.');
+        return;
+    }
+
+    if (typeof XLSX === 'undefined') {
+        alert('Excel parser is not available. Please check your internet connection and reload the app.');
+        return;
+    }
+
+    const selectedFile = cancelledItemsUploadedFile;
+    cancelledItemsInFlight = true;
+
+    if (cancelledItemsProcessBtn) {
+        cancelledItemsProcessBtn.disabled = true;
+    }
+    if (cancelledItemsClearBtn) {
+        cancelledItemsClearBtn.disabled = true;
+    }
+    if (cancelledItemsResultsSection) {
+        cancelledItemsResultsSection.style.display = 'none';
+    }
+    if (cancelledItemsProgressFill) {
+        cancelledItemsProgressFill.style.backgroundColor = '';
+    }
+
+    try {
+        setCancelledItemsProgress(4, 'Reading Meesho Excel file...');
+
+        const workbookData = await selectedFile.arrayBuffer();
+        const workbook = XLSX.read(workbookData, { type: 'array', cellDates: false });
+        const extracted = extractCancelledOrdersFromWorkbook(workbook);
+
+        if (!extracted.hasHeaders) {
+            throw new Error('Could not find both "Sub Order No" and "Reason for Credit Entry" headers in the Excel file.');
+        }
+
+        if (!extracted.orders.length) {
+            throw new Error('No rows with "CANCELLED" in "Reason for Credit Entry" were found in the Excel file.');
+        }
+
+        setCancelledItemsProgress(
+            15,
+            `Found ${extracted.orders.length} cancelled order(s). Loading Label Finder batches...`
+        );
+
+        const entries = (await getAllFinderEntries())
+            .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+        if (!entries.length) {
+            throw new Error('No labels are currently stored in Label Finder. Upload labels in the Label Finder tab first.');
+        }
+
+        const activeCacheKeys = new Set(entries.map(entry => `${entry.id}::${entry.createdAt || ''}`));
+        for (const cacheKey of Array.from(cancelledItemsPageTextCache.keys())) {
+            if (!activeCacheKeys.has(cacheKey)) {
+                cancelledItemsPageTextCache.delete(cacheKey);
+            }
+        }
+
+        const matches = await findCancelledLabelMatches(
+            extracted.orders,
+            entries,
+            (percent, message) => setCancelledItemsProgress(percent, message)
+        );
+
+        setCancelledItemsProgress(95, `Found ${matches.length} matching label(s). Preparing results...`);
+        renderCancelledItemsResults(matches, extracted.orders.length);
+
+        setCancelledItemsProgress(
+            100,
+            matches.length
+                ? `Done. Found ${matches.length} cancelled label(s) from ${extracted.orders.length} cancelled order(s).`
+                : `No matching cancelled labels found in the ${entries.length} label batch(es) stored in Label Finder.`
+        );
+    } catch (error) {
+        console.error('Cancelled items processing failed:', error);
+
+        if (cancelledItemsResultsSection) {
+            cancelledItemsResultsSection.style.display = 'none';
+        }
+
+        setCancelledItemsProgress(0, `Error: ${error.message}`, true);
+    } finally {
+        cancelledItemsInFlight = false;
+
+        if (cancelledItemsProcessBtn) {
+            cancelledItemsProcessBtn.disabled = !cancelledItemsUploadedFile;
+        }
+        if (cancelledItemsClearBtn) {
+            cancelledItemsClearBtn.disabled = false;
+        }
+    }
+}
 
 // ============================================
 // GOOGLE APPS SCRIPT CODE (for user to deploy)

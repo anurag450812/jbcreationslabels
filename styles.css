@@ -116,6 +116,7 @@ section {
 #fileInput,
 #counterFileInput,
 #croppingFileInput,
+#cancelledItemsFileInput,
 #returnExtractorFileInput,
 #fbfOrdersFileInput {
     position: absolute;
@@ -2555,5 +2556,113 @@ footer {
     .fbf-orders-summary {
         flex-direction: column;
         gap: 15px;
+    }
+}
+/* Cancelled Items */
+.cancelled-items-results-section {
+    margin-bottom: 20px;
+}
+
+.cancelled-items-summary {
+    display: flex;
+    justify-content: center;
+    gap: 30px;
+    flex-wrap: wrap;
+    margin-bottom: 20px;
+}
+
+.cancelled-items-summary .stat-item {
+    min-width: 160px;
+}
+
+.cancelled-items-results {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.cancelled-item {
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 12px 14px;
+    background: var(--card-bg);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 14px;
+}
+
+.cancelled-item-main {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+}
+
+.cancelled-item-title {
+    font-weight: 600;
+    color: var(--text-primary);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+
+.cancelled-item-status {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    padding: 2px 8px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    background: #fee2e2;
+    color: #b91c1c;
+}
+
+.cancelled-item-details {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 16px;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.cancelled-item-details strong {
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+.cancelled-item-actions {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.cancelled-item-empty {
+    padding: 18px;
+    border: 1px dashed var(--border-color);
+    border-radius: 10px;
+    color: var(--text-secondary);
+    text-align: center;
+}
+
+.cancelled-items-error {
+    color: #b91c1c;
+}
+
+@media (max-width: 768px) {
+    .cancelled-items-summary {
+        flex-direction: column;
+        gap: 15px;
+    }
+
+    .cancelled-item {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .cancelled-item-actions {
+        width: 100%;
     }
 }

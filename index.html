@@ -5,10 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>JB Creations - Shipping Label Sorter</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>🏷️</text></svg>">
-    <link rel="stylesheet" href="styles.css?v=2">
+    <link rel="stylesheet" href="styles.css?v=3">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
     <div class="container">
@@ -27,6 +28,9 @@
                 </button>
                 <button class="tab-btn" data-tab="finder" onclick="switchTab('finder')">
                     🔎 Label Finder
+                </button>
+                <button class="tab-btn" data-tab="cancelled-items" onclick="switchTab('cancelled-items')">
+                    Cancelled Items
                 </button>
                 <button class="tab-btn" data-tab="packet-parchi" onclick="switchTab('packet-parchi')">
                     🧾 Packet Parchi
@@ -383,6 +387,57 @@
                 </section>
             </div>
             <!-- END FINDER TAB CONTENT -->
+
+            <!-- CANCELLED ITEMS TAB CONTENT -->
+            <div id="cancelled-items-tab-content" class="tab-content">
+                <section class="upload-section">
+                    <div class="upload-area" id="cancelledItemsUploadArea">
+                        <p>Click to browse (.xlsx, .xls, .csv with "Sub Order No" and "Reason for Credit Entry"; AWB column optional)</p>
+                        <input type="file" id="cancelledItemsFileInput" accept=".xlsx,.xls,.csv">
+                    </div>
+                    <div class="button-group">
+                        <button class="btn btn-secondary" id="cancelledItemsClearBtn" style="display: none;">
+                            Clear File
+                        </button>
+                        <button class="btn btn-primary" id="cancelledItemsProcessBtn" disabled>
+                            Find Cancelled Labels
+                        </button>
+                    </div>
+                    <p class="finder-upload-status-text" id="cancelledItemsFileInfo"></p>
+                </section>
+
+                <section class="status-section" id="cancelledItemsStatusSection" style="display: none;">
+                    <div class="status-card">
+                        <h3>Processing Status</h3>
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="cancelledItemsProgressFill"></div>
+                        </div>
+                        <p id="cancelledItemsStatusText">Initializing...</p>
+                    </div>
+                </section>
+
+                <section class="cancelled-items-results-section" id="cancelledItemsResultsSection" style="display: none;">
+                    <div class="results-card">
+                        <h3>Cancelled Labels</h3>
+                        <div class="cancelled-items-summary">
+                            <div class="stat-item">
+                                <span class="stat-value" id="cancelledItemsCancelledCount">0</span>
+                                <span class="stat-label">Cancelled Orders</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-value" id="cancelledItemsMatchCount">0</span>
+                                <span class="stat-label">Matched Labels</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-value" id="cancelledItemsCourierCount">0</span>
+                                <span class="stat-label">Courier Partners</span>
+                            </div>
+                        </div>
+                        <div id="cancelledItemsResultsList" class="cancelled-items-results"></div>
+                    </div>
+                </section>
+            </div>
+            <!-- END CANCELLED ITEMS TAB CONTENT -->
 
             <!-- PACKET PARCHI TAB CONTENT -->
             <div id="packet-parchi-tab-content" class="tab-content">
@@ -1016,7 +1071,7 @@ function doGet(e) {
         </div>
     </div>
 
-    <script src="script.js?v=2"></script>
+    <script src="script.js?v=3"></script>
     <script>
         function copyAppsScript() {
             const scriptCode = document.getElementById('appsScriptCode').textContent;
