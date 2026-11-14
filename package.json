@@ -5,6 +5,7 @@
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
+    "test:stock-match": "node test/stock-sku-match.test.js",
     "desktop": "electron .",
     "build:win": "electron-builder --win portable",
     "build:installer": "electron-builder --win nsis"

@@ -4511,6 +4511,41 @@ function updateGoogleSheetsStatus() {
     }
 }
 
+function escapeHtml(value) {
+    return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function formatStockDeductionStatus(result, labelCounts) {
+    const updatedCount = (result && Number.isFinite(result.totalUpdated))
+        ? result.totalUpdated
+        : Object.keys(labelCounts).length;
+    const errors = result && Array.isArray(result.errors) ? result.errors : [];
+
+    if (errors.length === 0) {
+        return `<span class="status-success">✅ Stock updated! (${updatedCount} labels deducted)</span>`;
+    }
+
+    const items = errors.map((err) => {
+        const label = escapeHtml(err && err.label != null && String(err.label) !== '' ? err.label : 'Unknown label');
+        const kind = err && err.code === 'duplicate'
+            ? 'Duplicate'
+            : (err && err.code === 'not_found' ? 'Not found' : 'Not deducted');
+        const message = escapeHtml(err && err.message ? err.message : 'Stock was not deducted');
+        return `<li><strong>${kind}:</strong> ${label} — ${message}</li>`;
+    }).join('');
+
+    const summary = updatedCount > 0
+        ? `Stock updated for ${updatedCount} label(s). ${errors.length} label(s) were not deducted:`
+        : `No stock was deducted. ${errors.length} label(s) need attention:`;
+
+    return `<span class="status-error">❌ ${escapeHtml(summary)}</span><ul class="stock-update-errors">${items}</ul>`;
+}
+
 // Function to deduct stock from Google Sheets
 async function deductStockFromGoogleSheets(labelCounts) {
     if (!GOOGLE_SHEETS_CONFIG.webAppUrl) {
@@ -4563,8 +4598,7 @@ async function deductStockFromGoogleSheets(labelCounts) {
         
         if (result.success) {
             if (stockUpdateStatus) {
-                const updatedCount = result.totalUpdated || Object.keys(labelCounts).length;
-                stockUpdateStatus.innerHTML = `<span class="status-success">✅ Stock updated! (${updatedCount} labels deducted)</span>`;
+                stockUpdateStatus.innerHTML = formatStockDeductionStatus(result, labelCounts);
             }
             console.log('Stock deduction successful:', result);
             return { success: true, message: 'Stock updated successfully', data: result };
@@ -4575,7 +4609,7 @@ async function deductStockFromGoogleSheets(labelCounts) {
     } catch (error) {
         console.error('Error updating Google Sheets:', error);
         if (stockUpdateStatus) {
-            stockUpdateStatus.innerHTML = `<span class="status-error">❌ Error: ${error.message}</span>`;
+            stockUpdateStatus.innerHTML = `<span class="status-error">❌ Error: ${escapeHtml(error.message)}</span>`;
         }
         return { success: false, message: error.message };
     }
