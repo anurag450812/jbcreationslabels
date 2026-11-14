@@ -1015,6 +1015,20 @@ footer {
     color: #ef4444;
 }
 
+.stock-update-errors {
+    margin: 10px auto 0;
+    padding-left: 1.25rem;
+    max-width: 560px;
+    text-align: left;
+    font-size: 0.92rem;
+    font-weight: 600;
+    color: #ef4444;
+}
+
+.stock-update-errors li {
+    margin: 4px 0;
+}
+
 .status-connected {
     color: #10b981;
     font-weight: 600;

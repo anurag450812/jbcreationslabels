@@ -330,6 +330,103 @@ function doPost(e) {
 }
 
 /**
+ * Normalize a STOCK COUNT SKU and an incoming label the same way:
+ * trim whitespace, lowercase, then strip one leading "jb-" prefix.
+ * "bd10" and "jb-BD10" both become "bd10". "jb-bd100" stays "bd100".
+ */
+function normalizeStockSku(value) {
+  var normalized = String(value == null ? '' : value).trim().toLowerCase();
+  if (normalized.indexOf('jb-') === 0) {
+    normalized = normalized.substring(3);
+  }
+  return normalized;
+}
+
+/**
+ * Row indexes (into the sheet values array, header at index 0) whose column A
+ * SKU exactly equals `label` after normalizeStockSku. Header row is skipped.
+ */
+function findExactStockRowIndexes(rows, label) {
+  var searchLabel = normalizeStockSku(label);
+  var matches = [];
+  if (!rows || !rows.length) return matches;
+
+  for (var i = 1; i < rows.length; i++) {
+    var row = rows[i];
+    var cellValue = (row && row.length) ? row[0] : '';
+    if (normalizeStockSku(cellValue) === searchLabel) {
+      matches.push(i);
+    }
+  }
+
+  return matches;
+}
+
+/**
+ * Decide stock deductions without touching the spreadsheet.
+ * One exact row: deduct, never below 0.
+ * No exact row: not_found, deduct nothing.
+ * More than one exact row: duplicate, deduct nothing.
+ * Two incoming labels that normalize to the same single row deduct in order.
+ */
+function planStockDeductions(values, labelCounts) {
+  var updates = [];
+  var errors = [];
+  var rows = values || [];
+  var workingStock = {};
+
+  for (var label in labelCounts) {
+    if (!Object.prototype.hasOwnProperty.call(labelCounts, label)) continue;
+
+    var deductAmount = labelCounts[label];
+    var matchIndexes = findExactStockRowIndexes(rows, label);
+
+    if (matchIndexes.length === 0) {
+      errors.push({
+        label: label,
+        code: 'not_found',
+        message: 'Label not found in sheet'
+      });
+      continue;
+    }
+
+    if (matchIndexes.length > 1) {
+      var rowNumbers = [];
+      for (var r = 0; r < matchIndexes.length; r++) {
+        rowNumbers.push(matchIndexes[r] + 1);
+      }
+      errors.push({
+        label: label,
+        code: 'duplicate',
+        message: 'Duplicate SKU in sheet (rows ' + rowNumbers.join(', ') + '). Stock was not deducted.'
+      });
+      continue;
+    }
+
+    var i = matchIndexes[0];
+    var currentStock = Object.prototype.hasOwnProperty.call(workingStock, i)
+      ? workingStock[i]
+      : (Number(rows[i][1]) || 0);
+    var newStock = Math.max(0, currentStock - deductAmount);
+    workingStock[i] = newStock;
+
+    updates.push({
+      label: label,
+      matchedCell: rows[i][0],
+      previousStock: currentStock,
+      deducted: deductAmount,
+      newStock: newStock,
+      rowNumber: i + 1
+    });
+  }
+
+  return {
+    updates: updates,
+    errors: errors
+  };
+}
+
+/**
  * Handles the stock deduction logic
  * @param {Object} data - Contains sheetName and labelCounts
  */
@@ -349,51 +446,19 @@ function handleDeductStock(data) {
   var labelCounts = data.labelCounts;
   var dataRange = sheet.getDataRange();
   var values = dataRange.getValues();
-  
-  var updates = [];
-  var errors = [];
-  
-  // Process each label
-  for (var label in labelCounts) {
-    var deductAmount = labelCounts[label];
-    var found = false;
-    
-    // Search for the label in column A (case-insensitive, partial match)
-    // This will find 'bd18' in 'jb-BD18', 'JB-bd18-xl', etc.
-    for (var i = 1; i < values.length; i++) { // Start from 1 to skip header row
-      var cellLabel = String(values[i][0]).toLowerCase().trim();
-      var searchLabel = label.toLowerCase().trim();
-      
-      // Use includes() for partial matching instead of exact match
-      // This finds the label anywhere within the cell value
-      if (cellLabel.includes(searchLabel)) {
-        found = true;
-        var currentStock = Number(values[i][1]) || 0;
-        var newStock = Math.max(0, currentStock - deductAmount); // Don't go below 0
-        
-        // Update the cell (Column B = index 2, row = i + 1 because rows are 1-indexed)
-        sheet.getRange(i + 1, 2).setValue(newStock);
-        
-        updates.push({
-          label: label,
-          matchedCell: values[i][0], // Show what cell was matched
-          previousStock: currentStock,
-          deducted: deductAmount,
-          newStock: newStock
-        });
-        
-        Logger.log("Updated " + label + " (matched '" + values[i][0] + "'): " + currentStock + " -> " + newStock + " (deducted " + deductAmount + ")");
-        break;
-      }
-    }
-    
-    if (!found) {
-      errors.push({
-        label: label,
-        message: 'Label not found in sheet (searched for partial match)'
-      });
-      Logger.log("Label not found: " + label);
-    }
+  var plan = planStockDeductions(values, labelCounts);
+  var updates = plan.updates;
+  var errors = plan.errors;
+
+  for (var u = 0; u < updates.length; u++) {
+    var update = updates[u];
+    // Column B, sheet rows are 1-indexed (values index 0 is row 1, the header)
+    sheet.getRange(update.rowNumber, 2).setValue(update.newStock);
+    Logger.log("Updated " + update.label + " (matched '" + update.matchedCell + "'): " + update.previousStock + " -> " + update.newStock + " (deducted " + update.deducted + ")");
+  }
+
+  for (var e = 0; e < errors.length; e++) {
+    Logger.log("Stock not deducted for " + errors[e].label + ": " + errors[e].message);
   }
   
   // Trigger the existing findDaysForNeedInSheet function after stock update
@@ -1052,8 +1117,9 @@ function testDeductStock() {
 }
 
 /**
- * Get current stock for a label (utility function)
- * Uses partial matching - finds 'bd18' in 'jb-BD18', etc.
+ * Get current stock for a label (utility function).
+ * Uses the same exact normalized match as stock deduction.
+ * Returns null when the sheet is missing, the SKU is absent, or more than one row matches.
  */
 function getStockForLabel(labelName, sheetName) {
   sheetName = sheetName || 'STOCK COUNT';
@@ -1062,22 +1128,22 @@ function getStockForLabel(labelName, sheetName) {
   if (!sheet) return null;
   
   var values = sheet.getDataRange().getValues();
-  var searchLabel = labelName.toLowerCase().trim();
-  
-  for (var i = 1; i < values.length; i++) {
-    var cellLabel = String(values[i][0]).toLowerCase().trim();
-    // Use includes() for partial matching
-    if (cellLabel.includes(searchLabel)) {
-      return {
-        label: values[i][0],
-        stock: values[i][1],
-        row: i + 1,
-        matchedSearch: labelName
-      };
+  var matchIndexes = findExactStockRowIndexes(values, labelName);
+
+  if (matchIndexes.length !== 1) {
+    if (matchIndexes.length > 1) {
+      Logger.log('Duplicate SKU for ' + labelName + ': ' + matchIndexes.length + ' rows');
     }
+    return null;
   }
-  
-  return null;
+
+  var i = matchIndexes[0];
+  return {
+    label: values[i][0],
+    stock: values[i][1],
+    row: i + 1,
+    matchedSearch: labelName
+  };
 }
 
 // ============================================
@@ -1969,5 +2035,15 @@ function appendDailyParchiSkuPrintsInternal(pairs, useYesterdayDate, deferFlush)
     message: 'SKU+Tracking pairs appended successfully',
     rowsAdded: uniqueRows.length,
     duplicatesSkipped: duplicateCount
+  };
+}
+
+// Node-only export so the stock matcher can be tested outside Apps Script.
+// Apps Script has no `module`, so this block does not run in the sheet.
+if (typeof module !== 'undefined' && module && module.exports) {
+  module.exports = {
+    normalizeStockSku: normalizeStockSku,
+    findExactStockRowIndexes: findExactStockRowIndexes,
+    planStockDeductions: planStockDeductions
   };
 }
